@@ -16,18 +16,19 @@ import uuid
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.base import uuid7
 from app.core.errores import Conflicto, NoEncontrado, PermisoDenegado, ReglaNegocio
+from app.core.utiles import snapshot
 from app.modules.auditoria.servicios import registrar_accion
 from app.modules.catalogo.models import Producto
-from app.modules.catalogo.utiles import snapshot
 from app.modules.identidad.models import Autorizacion, Tercero
 from app.modules.inventario.configuracion import umbral_sede
 from app.modules.inventario.models import (
+    AlertaStock,
     Bodega,
     EntradaMercancia,
     EntradaMercanciaLinea,
@@ -69,6 +70,25 @@ def bloquear_existencia(db: Session, bodega_id: uuid.UUID, producto_id: uuid.UUI
     ).one()
 
 
+def bloquear_existencias(db: Session, bodega_id: uuid.UUID, producto_ids) -> dict[uuid.UUID, Existencia]:
+    """Como `bloquear_existencia` para varios productos en 2 sentencias (alta + FOR UPDATE), en orden estable por
+    producto: dos ventas concurrentes con los mismos productos no se bloquean en cruz."""
+    ids = sorted(set(producto_ids), key=str)
+    if not ids:
+        return {}
+    db.execute(
+        pg_insert(Existencia).values([{"bodega_id": bodega_id, "producto_id": p} for p in ids]).on_conflict_do_nothing()
+    )
+    filas = db.scalars(
+        select(Existencia)
+        .where(Existencia.bodega_id == bodega_id, Existencia.producto_id.in_(ids))
+        .order_by(Existencia.producto_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return {e.producto_id: e for e in filas}
+
+
 def registrar_movimiento(
     db: Session,
     *,
@@ -83,11 +103,14 @@ def registrar_movimiento(
     origen_linea_id: uuid.UUID,
     ocurrido_at: datetime | None = None,
     costo_estimado: bool = False,
+    existencia: Existencia | None = None,
 ) -> MovimientoInventario:
-    """Registra UN movimiento. `cantidad` es la magnitud (> 0); el signo lo da el tipo."""
+    """Registra UN movimiento. `cantidad` es la magnitud (> 0); el signo lo da el tipo.
+
+    `existencia`: la fila ya bloqueada por quien llama (evita repetir el alta y el bloqueo)."""
     if cantidad <= 0:
         raise ReglaNegocio("La cantidad debe ser mayor que cero.", code="cantidad_invalida")
-    ex = bloquear_existencia(db, bodega_id, producto_id)
+    ex = existencia or bloquear_existencia(db, bodega_id, producto_id)
     entrada = tipo in ENTRADAS
     saldo_prev = ex.cantidad
     cpp_prev = ex.costo_promedio
@@ -138,10 +161,46 @@ def registrar_movimiento(
     return mov
 
 
+def alerta_stock_negativo(db: Session, mov: MovimientoInventario) -> bool:
+    """Abre (una sola vez mientras siga abierta) la alerta `stock_negativo` si el movimiento dejó la existencia < 0.
+
+    Devuelve True si la existencia quedó negativa. La existencia negativa es política del edge (modelo §7.14).
+    """
+    if mov.saldo_cantidad >= 0:
+        return False
+    db.execute(
+        pg_insert(AlertaStock)
+        .values(
+            tipo="stock_negativo",
+            bodega_id=mov.bodega_id,
+            producto_id=mov.producto_id,
+            movimiento_id=mov.id,
+            cantidad_resultante=mov.saldo_cantidad,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["bodega_id", "producto_id", "tipo"], index_where=text("estado <> 'resuelta'")
+        )
+    )
+    publicar_evento(
+        db,
+        "alerta_stock",
+        mov.id,
+        "alerta_stock.stock_negativo",
+        {"bodega_id": mov.bodega_id, "producto_id": mov.producto_id, "cantidad_resultante": mov.saldo_cantidad},
+    )
+    return True
+
+
 # ======================================================================================= bodegas y ubicaciones
 def crear_bodega(db: Session, actor_id: uuid.UUID, datos: dict) -> Bodega:
     if db.get(Sede, datos["sede_id"]) is None:
         raise ReglaNegocio("La sede no existe.", code="sede_invalida")
+    datos = dict(datos)
+    tipo = datos.get("tipo", "general")
+    if tipo not in ("general", "averias"):
+        raise ReglaNegocio("Tipo de bodega inválido (general | averias).", code="tipo_bodega_invalido")
+    if tipo == "averias":
+        datos["es_vendible"] = False  # la bodega de averías nunca es vendible
     b = Bodega(created_by=actor_id, **datos)
     db.add(b)
     db.flush()  # uq_bodegas_sede_codigo -> 409
@@ -156,6 +215,8 @@ def actualizar_bodega(db: Session, actor_id: uuid.UUID, bodega_id: uuid.UUID, da
     for k in ("nombre", "es_vendible", "activo"):
         if k in datos:
             setattr(b, k, datos[k])
+    if b.tipo == "averias" and b.es_vendible:
+        raise ReglaNegocio("Una bodega de averías no puede ser vendible.", code="averias_no_vendible")
     db.flush()
     _evento(db, "bodega", b, "actualizada")
     return b
@@ -406,7 +467,7 @@ def registrar_ajuste(
                 valor=str(valor),
                 umbral=str(umbral),
             )
-        from app.modules.cajas.servicios import consumir_autorizacion
+        from app.modules.identidad.autorizaciones import consumir_autorizacion
 
         a = db.get(Autorizacion, autorizacion_id)
         if a is None:

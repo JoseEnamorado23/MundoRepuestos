@@ -15,12 +15,19 @@ from app.api.problemas import registrar_manejadores
 from app.core.config import validar_configuracion
 from app.core.db import cargar_modelos
 from app.core.logs import configurar_logging
+from app.modules.auditoria.router import router as revisiones_router
 from app.modules.cajas.router import dispositivos_router, pos_router
+from app.modules.cajas.router_autorizaciones import admin_router as solicitudes_admin_router
+from app.modules.cajas.router_autorizaciones import pos_router as solicitudes_pos_router
+from app.modules.cajas.router_turnos import forzado_router
+from app.modules.cajas.router_turnos import router as turnos_router
 from app.modules.catalogo.router import escaner_router
 from app.modules.catalogo.router import router as catalogo_router
 from app.modules.identidad.router import auth_router, empleados_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.organizacion.nodos import verificar_nodo
+from app.modules.organizacion.router import router as politicas_router
+from app.modules.ventas.router import router as ventas_router
 
 API_PREFIX = "/api/v1"
 
@@ -65,6 +72,13 @@ def create_app() -> FastAPI:
     v1.include_router(empleados_router)
     v1.include_router(dispositivos_router)
     v1.include_router(pos_router)
+    v1.include_router(turnos_router)
+    v1.include_router(forzado_router)
+    v1.include_router(ventas_router)
+    v1.include_router(solicitudes_pos_router)
+    v1.include_router(solicitudes_admin_router)
+    v1.include_router(revisiones_router)
+    v1.include_router(politicas_router)
     v1.include_router(escaner_router)
     v1.include_router(catalogo_router)
     v1.include_router(inventario_router)

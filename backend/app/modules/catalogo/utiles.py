@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from sqlalchemy import inspect
+from app.core.utiles import snapshot  # noqa: F401  (reexportado por compatibilidad)
 
 
 def sin_acentos(texto: str) -> str:
@@ -20,11 +20,6 @@ def slugify(texto: str) -> str:
 def normalizar_referencia(texto: str) -> str:
     """Igual a public.f_normalizar_ref: mayúsculas y solo alfanuméricos (ASCII)."""
     return re.sub(r"[^A-Za-z0-9]", "", texto).upper()
-
-
-def snapshot(obj) -> dict:
-    """Valores de las columnas del objeto (para el payload de eventos y la auditoría)."""
-    return {a.key: getattr(obj, a.key) for a in inspect(obj).mapper.column_attrs}
 
 
 # ---------------------------------------------------------------------------------------- códigos de barras

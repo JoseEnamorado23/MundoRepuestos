@@ -43,6 +43,9 @@ class BodegaIn(BaseModel):
     codigo: str = Field(min_length=1, max_length=20)
     nombre: str = Field(min_length=1, max_length=120)
     es_vendible: bool = True
+    tipo: Literal["general", "averias"] = Field(
+        "general", description="'averias' = destino no vendible de devoluciones"
+    )
 
 
 class BodegaPatch(BaseModel):
@@ -56,6 +59,7 @@ class BodegaOut(_Out):
     sede_id: uuid.UUID
     codigo: str
     nombre: str
+    tipo: str
     es_vendible: bool
     activo: bool
 

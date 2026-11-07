@@ -144,10 +144,14 @@ def test_venta_confirmada_queda_congelada(conn):
 
 def test_turno_cerrado_queda_congelado(conn):
     ent = f.entorno_pos(conn)
+    # 0010: la BD ya NO rechaza un cierre con diferencia (la política decide; nunca bloquea)
+    assert not conn.execute(
+        text("SELECT 1 FROM pg_constraint WHERE conname = 'ck_turnos_diferencia_autorizada'")
+    ).first()
     conn.execute(
         text(
             "UPDATE cajas.turnos SET estado = 'cerrado', cerrado_at = now(), cerrado_por_id = :e, "
-            "efectivo_esperado = 50000, efectivo_contado = 49000 WHERE id = :t"
+            "umbral_diferencia = 5000, efectivo_esperado = 50000, efectivo_contado = 49000 WHERE id = :t"
         ),
         {"e": ent["empleado"], "t": ent["turno"]},
     )
@@ -159,7 +163,8 @@ def _confirmar(conn, venta: str) -> None:
     conn.execute(
         text(
             "UPDATE ventas.ventas SET estado = 'confirmada', confirmada_at = now(), numero_interno = 1, "
-            "subtotal = 100 WHERE id = :i"
+            "subtotal = 100, cajero_id = (SELECT t.abierto_por_id FROM cajas.turnos t WHERE t.id = turno_id) "
+            "WHERE id = :i"
         ),
         {"i": venta},
     )

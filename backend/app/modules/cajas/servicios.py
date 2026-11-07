@@ -8,42 +8,62 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from typing import Protocol
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.core.base import nodo_actual
 from app.core.config import get_settings
-from app.core.errores import Conflicto, NoAutenticado, NoEncontrado, PermisoDenegado, ReglaNegocio
+from app.core.errores import NoAutenticado, NoEncontrado, PermisoDenegado, ReglaNegocio
 from app.core.seguridad import ahora, crear_jwt, indice_pin, nuevo_token_opaco, sha256_hex, verificar_secreto
+from app.core.utiles import snapshot
 from app.modules.auditoria.servicios import registrar_accion, verificar_bloqueo
 from app.modules.cajas.models import Caja, Dispositivo
-from app.modules.identidad.models import Autorizacion, AutorizacionConsumo, Empleado, EmpleadoSede
+from app.modules.identidad.autorizaciones import SesionPosLike
+from app.modules.identidad.models import Autorizacion, Empleado, EmpleadoSede
 from app.modules.identidad.servicios import permisos_de
-
-
-class SesionPosLike(Protocol):
-    """Lo que los servicios necesitan de una sesión POS (la implementa `app.api.deps.SesionPos`)."""
-
-    empleado: Empleado
-    dispositivo_id: uuid.UUID
-    caja_id: uuid.UUID
-    sede_id: uuid.UUID
-
+from app.modules.sync.servicios import publicar_evento
 
 # Acción (permiso) que un supervisor puede autorizar -> valor del ENUM identidad.tipo_autorizacion
 ACCIONES_AUTORIZABLES: dict[str, str] = {
     "pos.descuento_mayor": "descuento_mayor",
     "pos.anular": "anulacion",
     "pos.devolver": "devolucion",
-    "pos.precio_manual": "precio_manual",
+    "pos.cambiar_precio": "precio_manual",
     "pos.retirar_efectivo": "retiro_efectivo",
     "caja.cerrar_con_diferencia": "cierre_con_diferencia",
     "inventario.ajustar": "ajuste_inventario",
     "pos.venta_sin_stock": "venta_sin_stock",
 }
+
+
+# --------------------------------------------------------------------------------------------------
+# cajas
+# --------------------------------------------------------------------------------------------------
+def crear_caja(
+    db: Session, sede_id: uuid.UUID, codigo: str, nombre: str, bodega_id: uuid.UUID, *, actor_id: uuid.UUID | None
+) -> Caja:
+    """Alta de una caja. Su bodega debe ser de la misma sede y vendible. Publica evento y deja auditoría."""
+    from app.modules.inventario.models import Bodega
+
+    bodega = db.get(Bodega, bodega_id)
+    if bodega is None or bodega.sede_id != sede_id or not bodega.es_vendible or not bodega.activo:
+        raise ReglaNegocio(
+            "La bodega de la caja debe ser activa, vendible y de la misma sede.", code="bodega_caja_invalida"
+        )
+    caja = Caja(sede_id=sede_id, codigo=codigo, nombre=nombre, bodega_id=bodega_id, created_by=actor_id)
+    db.add(caja)
+    db.flush()  # uq_cajas_sede_codigo -> 409
+    publicar_evento(db, "caja", caja.id, "caja.creada", snapshot(caja), version=caja.version)
+    registrar_accion(
+        db,
+        "cajas.caja_creada",
+        actor_id=actor_id,
+        sede_id=sede_id,
+        entidad_tipo="caja",
+        entidad_id=caja.id,
+        despues={"codigo": codigo, "bodega_id": str(bodega_id)},
+    )
+    return caja
 
 
 # --------------------------------------------------------------------------------------------------
@@ -299,56 +319,3 @@ def crear_autorizacion(
         despues={"accion": accion},
     )
     return autorizacion
-
-
-def consumir_autorizacion(
-    db: Session,
-    autorizacion_id: uuid.UUID,
-    *,
-    accion: str,
-    sesion: SesionPosLike,
-    entidad_tipo: str | None = None,
-    entidad_id: uuid.UUID | None = None,
-) -> Autorizacion:
-    """La acción protegida llama a esto UNA vez. Valida acción, solicitante, dispositivo, entidad y vigencia, y
-    marca el consumo de forma atómica (la PK de `autorizaciones_consumos` impide el segundo uso)."""
-    a = db.get(Autorizacion, autorizacion_id)
-    if a is None:
-        raise NoEncontrado("Autorización no encontrada.", code="autorizacion_no_encontrada")
-    if a.permiso_codigo != accion:
-        raise ReglaNegocio("La autorización no corresponde a esta acción.", code="autorizacion_otra_accion")
-    if a.solicitado_por_id != sesion.empleado.id or a.dispositivo_id != sesion.dispositivo_id:
-        raise PermisoDenegado(
-            "La autorización fue emitida para otro empleado o dispositivo.", code="autorizacion_ajena"
-        )
-    if a.entidad_id is not None and a.entidad_id != entidad_id:
-        raise ReglaNegocio("La autorización es para otro documento.", code="autorizacion_otra_entidad")
-    if a.expira_at <= ahora():
-        raise ReglaNegocio("La autorización venció; solicite una nueva.", code="autorizacion_vencida")
-    res = db.execute(
-        pg_insert(AutorizacionConsumo)
-        .values(
-            autorizacion_id=a.id,
-            consumida_por_id=sesion.empleado.id,
-            dispositivo_id=sesion.dispositivo_id,
-            entidad_tipo=entidad_tipo,
-            entidad_id=entidad_id,
-            nodo_origen_id=nodo_actual(),
-        )
-        .on_conflict_do_nothing(index_elements=["autorizacion_id"])
-        .returning(AutorizacionConsumo.autorizacion_id)
-    )
-    if res.scalar_one_or_none() is None:
-        raise Conflicto("La autorización ya fue utilizada.", code="autorizacion_consumida")
-    registrar_accion(
-        db,
-        "pos.autorizacion_consumida",
-        actor_id=sesion.empleado.id,
-        sede_id=sesion.sede_id,
-        dispositivo_id=sesion.dispositivo_id,
-        autorizacion_id=a.id,
-        autorizado_por_id=a.autorizado_por_id,
-        entidad_tipo=entidad_tipo,
-        entidad_id=entidad_id,
-    )
-    return a

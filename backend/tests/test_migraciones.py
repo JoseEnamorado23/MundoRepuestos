@@ -40,7 +40,7 @@ def test_modelos_y_bd_coinciden(engine):
 def test_todas_las_tablas_del_modelo_existen(engine):
     esperadas = {f"{t.schema}.{t.name}" for t in Base.metadata.tables.values()}
     assert _tablas(engine.url) == esperadas
-    assert len(esperadas) == 84
+    assert len(esperadas) == 86
 
 
 def test_roundtrip_upgrade_downgrade_upgrade(url_base):

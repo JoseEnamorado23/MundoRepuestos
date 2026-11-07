@@ -17,6 +17,7 @@ from app.modules.auditoria.servicios import registrar_accion
 from app.modules.identidad.models import Empleado, EmpleadoRol, EmpleadoSede, Rol
 from app.modules.identidad.servicios import asignaciones_sede, revocar_sesiones_de, roles_de
 from app.modules.organizacion.models import Sede
+from app.modules.sync.servicios import publicar_evento
 
 PIN_DIGITOS = 6
 
@@ -80,6 +81,23 @@ def crear(
     for i, s in enumerate(dict.fromkeys(sedes)):
         db.add(EmpleadoSede(empleado_id=emp.id, sede_id=s, es_sede_principal=(i == 0)))
     db.flush()
+    publicar_evento(
+        db,
+        "empleado",
+        emp.id,
+        "empleado.creado",  # nunca viajan hashes de contraseña/PIN
+        {
+            "id": emp.id,
+            "tipo_documento_codigo": emp.tipo_documento_codigo,
+            "numero_documento": emp.numero_documento,
+            "nombres": emp.nombres,
+            "apellidos": emp.apellidos,
+            "usuario": emp.usuario,
+            "roles": sorted(r.codigo for r in resolved),
+            "sedes": list(dict.fromkeys(sedes)),
+        },
+        version=emp.version,
+    )
     registrar_accion(
         db,
         "identidad.empleado_creado",

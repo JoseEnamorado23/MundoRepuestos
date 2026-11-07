@@ -98,7 +98,8 @@ class Turno(Base, Mutable):
             "AND efectivo_esperado IS NOT NULL AND efectivo_contado IS NOT NULL)",
             name="cierre_completo",
         ),
-        # ck_turnos_diferencia_supervisor (usa la columna generada `diferencia`): migración 0003
+        # 0010: la diferencia de arqueo ya no bloquea el cierre (política `diferencia_arqueo`, revisión posterior)
+        CheckConstraint("NOT cierre_forzado OR motivo_cierre_forzado IS NOT NULL", name="forzado_con_motivo"),
         CheckConstraint(
             "supervisor_cierre_id IS NULL OR supervisor_cierre_id <> cerrado_por_id", name="supervisor_distinto"
         ),
@@ -125,6 +126,10 @@ class Turno(Base, Mutable):
     # GENERATED ALWAYS AS (efectivo_contado - efectivo_esperado) STORED: migración 0003
     diferencia = mapped_column(DINERO(), server_default=FetchedValue())
     observaciones: Mapped[str | None] = txt(null=True)
+    # tolerancia de diferencia vigente al cerrar (snapshot de configuracion_sede) y datos del cierre forzado (0009)
+    umbral_diferencia = mapped_column(DINERO())
+    cierre_forzado: Mapped[bool] = flag(False)
+    motivo_cierre_forzado: Mapped[str | None] = txt(null=True)
 
 
 class MotivoMovimientoCaja(Base, Mutable):

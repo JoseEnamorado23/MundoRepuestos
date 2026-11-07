@@ -174,14 +174,17 @@ def test_datos_demo_idempotente_e_imprime_nodo_y_caja(url_cli):
         assert tuple(sede) == ("Principal", "PRIN")
         res = c.execute(
             text(
-                "SELECT modo_numeracion, id_rango_proveedor, estado FROM fiscal.resoluciones_numeracion WHERE caja_id = :c"
+                "SELECT tipo_documento_codigo, modo_numeracion, estado FROM fiscal.resoluciones_numeracion"
+                " WHERE caja_id = :c ORDER BY tipo_documento_codigo"
             ),
             {"c": m_caja.group(1)},
-        ).one()
-        assert tuple(res) == ("proveedor", "DEMO-1", "activa")
+        ).all()
+        assert [tuple(r) for r in res] == [("FE", "proveedor", "activa"), ("NC", "proveedor", "activa")]
         assert c.scalar(text("SELECT nombre FROM cajas.cajas WHERE id = :c"), {"c": m_caja.group(1)}) == "Caja 1"
-        assert c.scalar(text("SELECT count(*) FROM inventario.bodegas")) == 1
-        assert c.scalar(text("SELECT count(*) FROM identidad.empleados_sedes WHERE pin_hash IS NOT NULL")) == 1
+        assert c.scalar(text("SELECT count(*) FROM inventario.bodegas")) == 2  # B01 + averías
+        assert (
+            c.scalar(text("SELECT count(*) FROM identidad.empleados_sedes WHERE pin_hash IS NOT NULL")) == 3
+        )  # propietario, cajero, vendedor
         # etapa 1: el edge es dueño de los maestros -> todo nace con origen en el nodo edge, con su código EAN
         for tabla, filtro in (
             ("organizacion.empresas", "nit = '900000001'"),
@@ -190,6 +193,8 @@ def test_datos_demo_idempotente_e_imprime_nodo_y_caja(url_cli):
             ("inventario.bodegas", "codigo = 'B01'"),
             ("cajas.cajas", "codigo = 'C1'"),
             ("identidad.empleados", "codigo_carne = 'CAJERO1'"),
+            ("identidad.empleados", "codigo_carne = 'PROP1'"),
+            ("identidad.empleados", "codigo_carne = 'VENDEDOR1'"),
         ):
             origen = c.scalar(text(f"SELECT nodo_origen_id::text FROM {tabla} WHERE {filtro}"))
             assert origen == m_nodo.group(1), (tabla, origen)
@@ -201,7 +206,7 @@ def test_datos_demo_idempotente_e_imprime_nodo_y_caja(url_cli):
     eng = create_engine(url_cli)
     with eng.connect() as c:
         assert c.scalar(text("SELECT count(*) FROM organizacion.empresas WHERE nit = '900000001'")) == 1
-        assert c.scalar(text("SELECT count(*) FROM fiscal.resoluciones_numeracion")) == 1
+        assert c.scalar(text("SELECT count(*) FROM fiscal.resoluciones_numeracion")) == 2
         assert c.scalar(text("SELECT count(*) FROM organizacion.nodos WHERE tipo = 'edge'")) == 1
         assert c.scalar(text("SELECT count(*) FROM identidad.empleados WHERE codigo_carne = 'CAJERO1'")) == 1
     eng.dispose()
@@ -288,3 +293,49 @@ def test_importar_por_cli_valida_y_confirma(url_cli, tmp_path):
         ("nodos", "listar", "--help"),
     ):
         assert _correr("-m", "app.cli", *cmd).returncode == 0
+
+
+def test_datos_demo_genera_eventos_outbox_y_auditoria(url_cli):
+    """A2: el CLI usa los mismos servicios que la API, así que deja eventos de sync y auditoría."""
+    r = _correr("-m", "app.cli", "datos-demo", url=url_cli)
+    assert r.returncode == 0, r.stderr
+    eng = create_engine(url_cli)
+    with eng.connect() as c:
+        tipos = {x[0] for x in c.execute(text("SELECT DISTINCT evento_tipo FROM sync.outbox_eventos"))}
+        for esperado in ("empresa.creada", "sede.creada", "nodo.creado", "configuracion_sede.sembrada", "caja.creada"):
+            assert esperado in tipos, tipos
+        assert (
+            c.scalar(text("SELECT count(*) FROM auditoria.log_acciones WHERE accion = 'organizacion.inicializar'")) >= 1
+        )
+    eng.dispose()
+
+
+def test_inicializar_idempotente_y_siembra_configuracion(url_cli):
+    args = ["-m", "app.cli", "inicializar", "--nit", "900000017", "--razon-social", "Taller Uno SAS"]
+    args += ["--sede-codigo", "S1", "--sede-nombre", "Sede Uno"]
+    a = _correr(*args, url=url_cli)
+    assert a.returncode == 0, a.stderr
+    m = re.search(r"NODO_ID[^=]*=\s*([0-9a-f-]{36})", a.stdout)
+    assert m, a.stdout
+    b = _correr(*args, url=url_cli)
+    assert b.returncode == 0 and m.group(1) in b.stdout
+    eng = create_engine(url_cli)
+    with eng.connect() as c:
+        assert c.scalar(text("SELECT count(*) FROM organizacion.empresas WHERE nit = '900000017'")) == 1
+        claves = {
+            x[0]
+            for x in c.execute(
+                text(
+                    "SELECT clave FROM organizacion.configuracion_sede cs JOIN organizacion.sedes s ON s.id = cs.sede_id"
+                    " WHERE s.codigo = 'S1'"
+                )
+            )
+        }
+        assert {
+            "autorizacion.retiro_caja",
+            "autorizacion.devolucion",
+            "autorizacion.diferencia_arqueo",
+            "ventas.descuento_max_pct_por_rol",
+            "ventas.espera_expira_horas",
+        } <= claves
+    eng.dispose()

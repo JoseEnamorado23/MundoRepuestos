@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.errores import Conflicto, ReglaNegocio
 from app.core.seguridad import sha256_hex
 from app.modules.cajas import servicios as svc_cajas
+from app.modules.identidad.autorizaciones import consumir_autorizacion
 from tests import api_helpers as h
 
 API = "/api/v1"
@@ -224,9 +225,9 @@ def test_autorizacion_se_consume_una_sola_vez(client, mundo, db, conn):
     assert fila.autorizado_por_id == mundo.supervisor.id and fila.detalle == {"descuento_pct": 25}
 
     yo = _Sesion(mundo, mundo.cajero)
-    svc_cajas.consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=yo)  # primera vez: ok
+    consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=yo)  # primera vez: ok
     with pytest.raises(Conflicto) as e:  # segunda: falla
-        svc_cajas.consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=yo)
+        consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=yo)
     assert e.value.code == "autorizacion_consumida"
 
 
@@ -234,12 +235,12 @@ def test_autorizacion_de_otra_accion_o_de_otro_empleado_no_sirve(client, mundo, 
     sesion = h.sesion_pos(client, mundo, "111111")
     aid = uuid.UUID(_autorizar(client, mundo, sesion).json()["autorizacion_id"])
     with pytest.raises(ReglaNegocio) as e:
-        svc_cajas.consumir_autorizacion(db, aid, accion="pos.anular", sesion=_Sesion(mundo, mundo.cajero))
+        consumir_autorizacion(db, aid, accion="pos.anular", sesion=_Sesion(mundo, mundo.cajero))
     assert e.value.code == "autorizacion_otra_accion"
     from app.core.errores import PermisoDenegado
 
     with pytest.raises(PermisoDenegado):
-        svc_cajas.consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=_Sesion(mundo, mundo.supervisor))
+        consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=_Sesion(mundo, mundo.supervisor))
 
 
 def test_autorizacion_vencida_falla(client, mundo, db, monkeypatch):
@@ -247,7 +248,7 @@ def test_autorizacion_vencida_falla(client, mundo, db, monkeypatch):
     monkeypatch.setattr(get_settings(), "autorizacion_ttl_seg", -1)  # nace ya vencida
     aid = uuid.UUID(_autorizar(client, mundo, sesion).json()["autorizacion_id"])
     with pytest.raises(ReglaNegocio) as e:
-        svc_cajas.consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=_Sesion(mundo, mundo.cajero))
+        consumir_autorizacion(db, aid, accion="pos.descuento_mayor", sesion=_Sesion(mundo, mundo.cajero))
     assert e.value.code == "autorizacion_vencida"
 
 

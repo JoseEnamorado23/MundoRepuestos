@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Numeric,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -257,6 +258,45 @@ class Autorizacion(Base, SoloAgregar):
     detalle: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     motivo: Mapped[str | None] = txt(null=True)
     expira_at: Mapped[datetime] = ts(null=False)  # 0006: autorización de un solo uso con vencimiento corto
+
+
+class SolicitudAutorizacion(Base, Mutable):
+    """Aprobación REMOTA (0010): el cajero pide desde la caja y alguien con `autorizaciones.aprobar` responde desde el
+    backoffice. Al aprobarse nace una `autorizaciones` de un solo uso (la misma que crea el PIN de supervisor)."""
+
+    __tablename__ = "solicitudes_autorizacion"
+    __table_args__ = (
+        CheckConstraint("estado IN ('pendiente','aprobada','rechazada','expirada')", name="estado_valido"),
+        CheckConstraint("resuelta_por_id IS NULL OR resuelta_por_id <> solicitado_por_id", name="no_autoaprobacion"),
+        CheckConstraint(
+            "estado <> 'aprobada' OR (autorizacion_id IS NOT NULL AND resuelta_por_id IS NOT NULL)",
+            name="aprobada_completa",
+        ),
+        Index(
+            "ix_solicitudes_autorizacion_pendientes",
+            "sede_id",
+            text("created_at DESC"),
+            postgresql_where=text("estado = 'pendiente'"),
+        ),
+        Index("ix_solicitudes_autorizacion_solicitante", "solicitado_por_id", text("created_at DESC")),
+        {"schema": SCHEMA},
+    )
+    sede_id: Mapped[uuid.UUID] = fk("organizacion.sedes.id")
+    solicitado_por_id: Mapped[uuid.UUID] = fk(f"{SCHEMA}.empleados.id")
+    dispositivo_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # referencia lógica a cajas.dispositivos
+    caja_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)  # referencia lógica a cajas.cajas
+    accion: Mapped[str] = fkt(f"{SCHEMA}.permisos.codigo")
+    monto = mapped_column(Numeric(18, 2))
+    motivo: Mapped[str | None] = txt(null=True)
+    contexto: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    entidad_tipo: Mapped[str | None] = txt(null=True)
+    entidad_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    estado: Mapped[str] = txt(server_default="pendiente")
+    expira_at: Mapped[datetime] = ts(null=False)
+    resuelta_por_id: Mapped[uuid.UUID | None] = fk(f"{SCHEMA}.empleados.id", null=True)
+    resuelta_at: Mapped[datetime | None] = ts()
+    comentario: Mapped[str | None] = txt(null=True)
+    autorizacion_id: Mapped[uuid.UUID | None] = fk(f"{SCHEMA}.autorizaciones.id", null=True)
 
 
 class AutorizacionConsumo(Base):

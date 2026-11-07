@@ -34,12 +34,16 @@ class Venta(Base, Mutable):
     __tablename__ = "ventas"
     __table_args__ = (
         CheckConstraint("total = subtotal + impuesto_total + redondeo", name="total"),
-        CheckConstraint("canal <> 'pos' OR (caja_id IS NOT NULL AND turno_id IS NOT NULL)", name="canal_pos"),
+        CheckConstraint(
+            "canal <> 'pos' OR (caja_id IS NOT NULL AND (estado = 'borrador' OR turno_id IS NOT NULL))",
+            name="canal_pos",
+        ),
         CheckConstraint("canal <> 'web' OR (caja_id IS NULL AND turno_id IS NULL)", name="canal_web"),
         CheckConstraint(
             "estado <> 'confirmada' OR (confirmada_at IS NOT NULL AND (canal = 'web' OR numero_interno IS NOT NULL))",
             name="confirmada",
         ),
+        CheckConstraint("estado <> 'confirmada' OR canal <> 'pos' OR cajero_id IS NOT NULL", name="confirmada_cajero"),
         CheckConstraint("subtotal >= 0 AND descuento_total >= 0 AND impuesto_total >= 0", name="montos_no_negativos"),
         CheckConstraint("tipo_documento_fiscal_codigo IN ('FE','POS_E')", name="tipo_documento"),
         Index(
@@ -64,6 +68,9 @@ class Venta(Base, Mutable):
             text("confirmada_at DESC"),
             postgresql_where=text("vendedor_id IS NOT NULL"),
         ),
+        Index(
+            "ix_ventas_cajero", "cajero_id", text("confirmada_at DESC"), postgresql_where=text("cajero_id IS NOT NULL")
+        ),
         Index("ix_ventas_placa", "placa_vehiculo", postgresql_where=text("placa_vehiculo IS NOT NULL")),
         {"schema": SCHEMA},
     )
@@ -71,7 +78,8 @@ class Venta(Base, Mutable):
     sede_id: Mapped[uuid.UUID] = fk("organizacion.sedes.id")
     caja_id: Mapped[uuid.UUID | None] = fk("cajas.cajas.id", null=True)
     turno_id: Mapped[uuid.UUID | None] = fk("cajas.turnos.id", null=True)
-    vendedor_id: Mapped[uuid.UUID | None] = fk("identidad.empleados.id", null=True)
+    vendedor_id: Mapped[uuid.UUID | None] = fk("identidad.empleados.id", null=True)  # quien armó la venta
+    cajero_id: Mapped[uuid.UUID | None] = fk("identidad.empleados.id", null=True)  # 0010: quien la cobró en su turno
     tercero_id: Mapped[uuid.UUID] = fk("identidad.terceros.id")
     estado: Mapped[str] = mapped_column(EstadoVenta, nullable=False, server_default="borrador")
     tipo_documento_fiscal_codigo: Mapped[str] = fkt("referencia.tipos_documento_fiscal.codigo", server_default="FE")

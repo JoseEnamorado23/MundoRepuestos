@@ -343,6 +343,31 @@ CHECK `ck_nodos_sede_segun_tipo`: `(tipo='edge' AND sede_id IS NOT NULL) OR (tip
 
 Claves previstas: `inventario.politica_stock_negativo` (`"permitir_con_alerta"` en edge), `ventas.redondeo_efectivo` (`0|50|100`), `ventas.descuento_max_sin_autorizacion_pct`, `pedidos.reserva_minutos_expiracion`, `pedidos.reserva_minutos_pago_pendiente`, `fiscal.horas_maximas_contingencia`, `pos.impresora_ancho_mm`.
 UNIQUE `uq_configuracion_sede_clave (COALESCE(sede_id,'00000000-0000-0000-0000-000000000000'), clave)` (índice de expresión: UNIQUE normal trataría los NULL como distintos). Sin otro índice: se carga completa al arrancar (decenas de filas).
+**Claves operativas (0009, sembradas por sede con `inicializar` y por la migración para las sedes existentes; el código las lee con `organizacion.configuracion.obtener`: fila de la sede → fila global → valor por defecto del código)**:
+
+| Clave | Por defecto | Uso |
+|---|---|---|
+| `inventario.umbral_aprobacion` | `500000` | Entradas/ajustes sobre este valor (COP) quedan pendientes de aprobación (0008) |
+| `inventario.propietario_autoaprueba` | `false` | El propietario puede aprobar lo que él mismo solicitó |
+| `ventas.descuento_max_pct_por_rol` | `{"cajero":5,"supervisor":15,"administrador":100,"propietario":100}` | Tope de descuento por rol; el mayor de los roles del empleado. Un rol ausente = 0 %. Por encima: autorización `pos.descuento_mayor` de OTRO empleado |
+| `autorizacion.devolucion` | `{"politica":"libre","umbral":200000,"sobre_umbral":"requiere_autorizacion"}` | (0010) Política de devoluciones (ver «Políticas de autorización» abajo) |
+| `autorizacion.descuento_mayor` | `{"politica":"requiere_autorizacion"}` | (0010) Descuento sobre el tope del rol |
+| `autorizacion.cambiar_precio` | `{"politica":"requiere_autorizacion"}` | (0010) Precio distinto al de lista |
+| `autorizacion.retiro_caja` | `{"politica":"libre","umbral":300000,"sobre_umbral":"requiere_autorizacion"}` | (0010) Retiro de efectivo del turno |
+| `autorizacion.diferencia_arqueo` | `{"politica":"revision_posterior"}` | (0010) Diferencia de arqueo al cerrar: **nunca bloquea el cierre** |
+| `autorizacion.solicitud_expira_min` | `5` | (0010) Minutos de vigencia de una solicitud de aprobación remota |
+| `ventas.espera_expira_horas` | `24` | Una venta en espera sin actividad se descarta (de forma perezosa al listar/suspender) |
+| `ventas.redondeo_efectivo` | `0` | `0\|50\|100`; solo ventas pagadas ÍNTEGRAMENTE en efectivo |
+
+**Políticas de autorización (0010)** — siete acciones: `devolucion`, `descuento_mayor`, `cambiar_precio`, `retiro_caja`, `diferencia_arqueo`, `ajuste_inventario`, `entrada_inventario`. Valor: `{"politica": ..., "umbral": <COP>, "sobre_umbral": ...}`:
+* `libre`: se ejecuta sin más. `revision_posterior`: se ejecuta y queda una fila en `auditoria.revisiones` (§14.2). `requiere_autorizacion`: exige `autorizacion_id` de OTRO empleado (PIN de supervisor en la caja o aprobación remota, `identidad.solicitudes_autorizacion`, §5.15).
+* Con `umbral`, hasta ese monto aplica `politica` y por encima `sobre_umbral` (por defecto `requiere_autorizacion`).
+* Quien ya tiene el permiso de la acción (`pos.devolver`, `pos.descuento_mayor`, `pos.cambiar_precio`, `pos.retirar_efectivo`; ver `docs/permisos.md`) no necesita pedir autorización.
+* `diferencia_arqueo` NO admite `requiere_autorizacion` (el servicio lo rechaza): el cierre del turno nunca se bloquea por una diferencia.
+* `ajuste_inventario` y `entrada_inventario` conservan el flujo de aprobación por umbral (`inventario.umbral_aprobacion`, §7.18); `GET /organizacion/politicas-autorizacion/{sede}` los muestra derivados de ese umbral.
+* Fijo, NO configurable: un reembolso en efectivo mayor al efectivo esperado del turno se rechaza (`reembolso_excede_efectivo`).
+* Las claves `cajas.umbral_retiro_efectivo`, `cajas.umbral_diferencia_arqueo` y `ventas.devolucion_requiere_autorizacion` (0009) se **retiran** en 0010 (la migración las borra y el `downgrade` las restituye).
+
 Claves añadidas en la revisión 2: `fiscal.modo_contingencia`, `fiscal.politica_cambio_adquirente`, `fiscal.momento_facturacion_web` (P-2/P-3, a definir con el contador), `ventas.mostrar_precio_sin_iva_con_nit` (§1.8), `pedidos.stock_seguridad_default` (P-5) y `pedidos.retencion_dias_recoger` (por defecto `3`).
 
 ---
@@ -551,12 +576,34 @@ Refresh tokens del backoffice. Opacos (48 bytes aleatorios); **solo se guarda el
 
 **Rotación con detección de robo**: cada `/auth/refresh` marca el token usado y emite otro de la misma familia. Si se presenta un token con `usado_at` ya fijado (reutilización), se **revoca toda la familia** y se audita `identidad.refresh_reutilizado`. Desactivar al empleado o cambiar su contraseña revoca todas sus sesiones.
 
+### 5.15 `identidad.solicitudes_autorizacion` — `[M]` · Clase S (0010)
+**Propósito**: aprobación REMOTA de una acción sensible: el cajero la pide desde la caja (`POST /pos/solicitudes-autorizacion`) y alguien con `autorizaciones.aprobar` la aprueba o rechaza desde el backoffice. Al aprobarse nace una fila normal de `autorizaciones` (§5.11, de un solo uso) cuyo id queda en `autorizacion_id`.
+
+| Columna | Tipo | Null | Default | Notas |
+|---|---|---|---|---|
+| `sede_id` | uuid | NOT NULL | — | → `organizacion.sedes` RESTRICT |
+| `solicitado_por_id` | uuid | NOT NULL | — | → `empleados` RESTRICT. Cajero que pide |
+| `dispositivo_id` | uuid | NULL | — | → `cajas.dispositivos` (sin FK; schema posterior) |
+| `caja_id` | uuid | NULL | — | |
+| `accion` | text | NOT NULL | — | → `permisos.codigo` RESTRICT (p. ej. `pos.devolver`) |
+| `monto` | numeric(18,2) | NULL | — | |
+| `motivo` | text | NOT NULL | — | |
+| `contexto` | jsonb | NOT NULL | `'{}'` | Lo que ve quien aprueba (venta, producto…) |
+| `entidad_tipo`, `entidad_id` | text, uuid | NULL | — | Documento al que se ata la autorización |
+| `estado` | text | NOT NULL | `'pendiente'` | `pendiente|aprobada|rechazada|expirada` |
+| `expira_at` | timestamptz | NOT NULL | — | Creación + `autorizacion.solicitud_expira_min` |
+| `resuelta_por_id`, `resuelta_at`, `comentario` | | NULL | — | |
+| `autorizacion_id` | uuid | NULL | — | → `autorizaciones` RESTRICT; solo si `aprobada` |
+
+CHECKs: `ck_solicitudes_autorizacion_estado_valido`, `ck_solicitudes_autorizacion_no_autoaprobacion` (`resuelta_por_id <> solicitado_por_id`), `ck_solicitudes_autorizacion_aprobada_completa`. Índices: `ix_solicitudes_autorizacion_pendientes`, `ix_solicitudes_autorizacion_solicitante`. El vencimiento se aplica de forma perezosa. Consulta del POS por polling cada 2 s (decisión en `docs/arquitectura.md`).
+
 ### 5.14 Autenticación y permisos (resumen de diseño)
 - **Backoffice**: `POST /auth/login` → access JWT (15 min, `typ=access`) + refresh opaco. El access token no se persiste; cada petición recarga al empleado (si se desactiva, el token deja de servir) y calcula permisos = unión de los roles **activos**.
 - **POS**: el dispositivo (registrado por un administrador con `cajas.dispositivos.gestionar`) recibe **una sola vez** un token aleatorio de 32 bytes; en `cajas.dispositivos.token_hash` solo queda su SHA-256. `POST /pos/auth/pin` (+ cabecera `X-Dispositivo-Token`) con PIN o código de carné devuelve un JWT `typ=pos` con claims `sub` (empleado), `dsp`, `caja`, `sede`, `exp` (`POS_SESION_TTL_MIN`, 600). Requisitos: empleado activo, asignado a la sede del dispositivo y con `pos.acceder`. En cada petición se revalida que el dispositivo siga `activo` y el empleado asignado.
 - **Fuerza bruta**: sin contadores en las filas maestras. Cada intento queda en `auditoria.log_acciones` (`pos.pin_fallido`/`pos.pin_ok`, `identidad.login_fallido`/`login_ok`) y el bloqueo se **deriva**: ≥ N fallos (por dispositivo: `MAX_INTENTOS_DISPOSITIVO`; por empleado: `MAX_INTENTOS_EMPLEADO`) en los últimos `BLOQUEO_MINUTOS` desde el último éxito ⇒ 429 con `Retry-After`. Índice `ix_log_acciones_dispositivo (dispositivo_id, ocurrido_at DESC) WHERE dispositivo_id IS NOT NULL`. `ocurrido_at` usa `clock_timestamp()` (no `now()`, que es la hora de inicio de la transacción).
 - **Autorización de supervisor**: `POST /pos/autorizaciones` con el PIN del supervisor (identificado en la sede de la sesión) y la acción; exige que el supervisor tenga ese permiso y sea otra persona; crea `autorizaciones` y devuelve `autorizacion_id` de un solo uso (§5.12).
-- Acciones autorizables → `tipo_autorizacion`: `pos.descuento_mayor`, `pos.anular`→anulacion, `pos.devolver`→devolucion, `pos.precio_manual`, `pos.retirar_efectivo`→retiro_efectivo, `caja.cerrar_con_diferencia`→cierre_con_diferencia, `inventario.ajustar`→ajuste_inventario, `pos.venta_sin_stock`.
+- Acciones autorizables → `tipo_autorizacion`: `pos.descuento_mayor`, `pos.anular`→anulacion, `pos.devolver`→devolucion, `pos.cambiar_precio`→precio_manual (0010 unifica `pos.precio_manual` en `pos.cambiar_precio`), `pos.retirar_efectivo`→retiro_efectivo, `caja.cerrar_con_diferencia`→cierre_con_diferencia, `inventario.ajustar`→ajuste_inventario, `pos.venta_sin_stock`.
+- 0010: los permisos `autorizaciones.aprobar` (aprobar/rechazar solicitudes remotas) y `revisiones.gestionar` (revisión posterior) los tienen administrador, supervisor y propietario; nuevo rol `vendedor` (`pos.acceder`, `pos.vender`, `catalogo.ver`, `inventario.ver`, `ventas.ver`: arma ventas en espera, no cobra ni abre turno). Tabla completa en `docs/permisos.md`.
 - Permisos nuevos (0006): `pos.acceder` (administrador, supervisor, cajero) y `cajas.dispositivos.gestionar` (administrador).
 
 ---
@@ -874,9 +921,10 @@ erDiagram
 | `codigo` | text | NOT NULL | — | `PRIN`, `MERMA`. |
 | `nombre` | text | NOT NULL | — | |
 | `es_vendible` | boolean | NOT NULL | `true` | `false` para bodegas de merma/devoluciones en revisión: su stock no cuenta como disponible. |
+| `tipo` | text | NOT NULL | `'general'` | (0009) `'general'` \| `'averias'`. `CHECK ck_bodegas_tipo_valido`. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_bodegas (sede_id, codigo)` (cubre listar bodegas de una sede).
+UNIQUE `uq_bodegas (sede_id, codigo)` (cubre listar bodegas de una sede). (0009) `ck_bodegas_averias_no_vendible` (`tipo <> 'averias' OR NOT es_vendible`) y `uq_bodegas_averias_sede (sede_id) WHERE tipo='averias' AND activo`: una bodega de averías activa por sede, nunca vendible; es el destino de las devoluciones defectuosas (su stock no cuenta como disponible).
 
 ### 7.2 `inventario.ubicaciones` — `[M]`
 `bodega_id → bodegas RESTRICT`, `codigo text NOT NULL` (`A-03-2`), `pasillo text NOT NULL`, `estante text NULL`, `nivel text NULL`, `descripcion text NULL`, `activo boolean NOT NULL DEFAULT true`. UNIQUE `uq_ubicaciones (bodega_id, codigo)`.
@@ -1351,8 +1399,11 @@ ENUM `cajas.estado_turno ('abierto','cerrado')`.
 | `efectivo_contado` | numeric(18,2) | NULL | — | Lo que el cajero contó. `CHECK (>= 0)` |
 | `diferencia` | numeric(18,2) | NULL | — | `GENERATED ALWAYS AS (efectivo_contado - efectivo_esperado) STORED`. Negativo = faltante; positivo = sobrante. |
 | `observaciones` | text | NULL | — | |
+| `umbral_diferencia` | numeric(18,2) | NULL | — | (0009) **Snapshot** de la tolerancia de la sede aplicada al cerrar. |
+| `cierre_forzado` | boolean | NOT NULL | `false` | (0009) Cierre por un supervisor de un turno abandonado (`cajas.cierre_forzado`). |
+| `motivo_cierre_forzado` | text | NULL | — | (0009) Obligatorio si `cierre_forzado`: `ck_turnos_forzado_con_motivo`. |
 
-CHECKs: `ck_turnos_cierre_completo` (`estado='abierto' OR (cerrado_at, cerrado_por_id, efectivo_esperado, efectivo_contado) todos NOT NULL`); `ck_turnos_diferencia_supervisor` (`diferencia IS NULL OR diferencia = 0 OR (supervisor_cierre_id IS NOT NULL AND autorizacion_cierre_id IS NOT NULL)`) — **no se cierra con diferencia sin supervisor**; `supervisor_cierre_id <> cerrado_por_id`.
+CHECKs: `ck_turnos_cierre_completo` (`estado='abierto' OR (cerrado_at, cerrado_por_id, efectivo_esperado, efectivo_contado) todos NOT NULL`); `ck_turnos_forzado_con_motivo`; `supervisor_cierre_id <> cerrado_por_id`. **0010 elimina `ck_turnos_diferencia_autorizada`** (creado en 0009): la diferencia de arqueo ya NUNCA bloquea el cierre; según `autorizacion.diferencia_arqueo` queda libre o en `auditoria.revisiones` (§14.2). `supervisor_cierre_id`/`autorizacion_cierre_id` solo se llenan hoy en el cierre forzado (supervisor) o quedan NULL. *Corrección documental*: el CHECK `ck_turnos_diferencia_supervisor` que describía una versión anterior de este documento nunca se creó.
 Fórmula: `efectivo_esperado = base_efectivo + Σ ventas_pagos(efectivo).valor + Σ movimientos_caja(ingreso) − Σ movimientos_caja(retiro) − Σ devoluciones_pagos(efectivo).valor` (los pagos en efectivo se guardan **netos de cambio**).
 Índices: `uq_turnos_abierto_por_caja (caja_id) WHERE estado='abierto'` — **un solo turno abierto por caja** (la BD lo garantiza aunque dos clientes intenten abrir a la vez); `uq_turnos_abierto_por_cajero (abierto_por_id) WHERE estado='abierto'` — un cajero no tiene dos cajas abiertas; `ix_turnos_caja_fecha (caja_id, abierto_at DESC)` — historial y cierre Z.
 Cerrado ⇒ inmutable (trigger). Un error de cierre se corrige con una nota en `auditoria`/ajuste contable, no reabriendo el turno.
@@ -1459,7 +1510,8 @@ ENUMs `ventas.canal_venta ('pos','web')`, `ventas.estado_venta ('borrador','conf
 | `sede_id` | uuid | NOT NULL | — | → `organizacion.sedes` RESTRICT |
 | `caja_id` | uuid | NULL | — | → `cajas.cajas` RESTRICT |
 | `turno_id` | uuid | NULL | — | → `cajas.turnos` RESTRICT |
-| `vendedor_id` | uuid | NULL | — | → `identidad.empleados` RESTRICT. Vendedor (comisión). El cajero es `created_by`. |
+| `vendedor_id` | uuid | NULL | — | → `identidad.empleados` RESTRICT. Quien ARMÓ la venta (comisión). Si no hubo venta en espera = el cajero. |
+| `cajero_id` | uuid | NULL | — | (0010) → `identidad.empleados` RESTRICT. Quien la COBRÓ en su turno. NOT NULL al confirmar una venta POS (`ck_ventas_confirmada_cajero`). |
 | `tercero_id` | uuid | NOT NULL | — | → `identidad.terceros` RESTRICT. Cliente fiscal; por defecto el consumidor final. |
 | `estado` | estado_venta | NOT NULL | `'borrador'` | |
 | `tipo_documento_fiscal_codigo` | text | NOT NULL | `'FE'` | → `referencia.tipos_documento_fiscal` RESTRICT. Hoy siempre `FE`; `POS_E` reservado. `CHECK (… IN ('FE','POS_E'))`. |
@@ -1476,7 +1528,7 @@ ENUMs `ventas.canal_venta ('pos','web')`, `ventas.estado_venta ('borrador','conf
 | `confirmada_at` | timestamptz | NULL | — | **Instante de negocio** de la venta (offline: cuando se cobró, no cuando se sincronizó). |
 | `notas` | text | NULL | — | |
 
-CHECKs: `ck_ventas_total (total = subtotal + impuesto_total + redondeo)`; `ck_ventas_canal_pos (canal <> 'pos' OR (caja_id IS NOT NULL AND turno_id IS NOT NULL))`; `ck_ventas_canal_web (canal <> 'web' OR (caja_id IS NULL AND turno_id IS NULL))`; `ck_ventas_confirmada (estado <> 'confirmada' OR (confirmada_at IS NOT NULL AND (canal = 'web' OR numero_interno IS NOT NULL)))`; `ck_ventas_montos_no_negativos`.
+CHECKs: `ck_ventas_total (total = subtotal + impuesto_total + redondeo)`; `ck_ventas_canal_pos (canal <> 'pos' OR (caja_id IS NOT NULL AND (estado = 'borrador' OR turno_id IS NOT NULL)))` (0010: una venta en espera no necesita turno; se asigna al confirmarla); `ck_ventas_confirmada_cajero (estado <> 'confirmada' OR canal <> 'pos' OR cajero_id IS NOT NULL)` (0010); `ck_ventas_canal_web (canal <> 'web' OR (caja_id IS NULL AND turno_id IS NULL))`; `ck_ventas_confirmada (estado <> 'confirmada' OR (confirmada_at IS NOT NULL AND (canal = 'web' OR numero_interno IS NOT NULL)))`; `ck_ventas_montos_no_negativos`.
 Constraint trigger `ctg_ventas_pagos_cuadran` (`DEFERRABLE INITIALLY DEFERRED`): al confirmar, `Σ ventas_pagos.valor = total`.
 Índices:
 - `uq_ventas_numero_interno (caja_id, numero_interno) WHERE numero_interno IS NOT NULL` — integridad y búsqueda "venta N° 1234 de la caja 1" (reimprimir tiquete).
@@ -1485,6 +1537,7 @@ Constraint trigger `ctg_ventas_pagos_cuadran` (`DEFERRABLE INITIALLY DEFERRED`):
 - `ix_ventas_tercero (tercero_id, confirmada_at DESC)` — historial del cliente.
 - `ix_ventas_borradores (caja_id) WHERE estado='borrador'` — recuperar ventas en espera (parcial: pocas filas).
 - `ix_ventas_vendedor (vendedor_id, confirmada_at DESC) WHERE vendedor_id IS NOT NULL` — comisiones.
+- `ix_ventas_cajero (cajero_id, confirmada_at DESC) WHERE cajero_id IS NOT NULL` (0010) — ventas por cajero.
 - `ix_ventas_placa (placa_vehiculo) WHERE placa_vehiculo IS NOT NULL`.
 - FK `lista_precio_id` sin índice (solo se usa en reportes agregados raros).
 
@@ -2180,6 +2233,23 @@ erDiagram
     }
 ```
 
+### 14.2 `auditoria.revisiones` — `[M]` · Clase S (0010)
+**Propósito**: acciones ejecutadas bajo la política `revision_posterior`: no se bloquean y quedan pendientes de revisión en el backoffice (`GET /revisiones`, `POST /revisiones/{id}/revisar` con comentario obligatorio, `GET /revisiones/reporte-diario?fecha=`; permiso `revisiones.gestionar`).
+
+| Columna | Tipo | Null | Default | Notas |
+|---|---|---|---|---|
+| `sede_id` | uuid | NOT NULL | — | → `organizacion.sedes` RESTRICT |
+| `accion` | text | NOT NULL | — | `devolucion`, `retiro_caja`, `diferencia_arqueo`, `descuento_mayor`, `cambiar_precio` |
+| `entidad_tipo`, `entidad_id` | text, uuid | NOT NULL, NULL | — | Documento que originó la revisión |
+| `monto` | numeric(18,2) | NULL | — | |
+| `empleado_id` | uuid | NULL | — | → `empleados` RESTRICT. Quien ejecutó la acción |
+| `dispositivo_id` | uuid | NULL | — | |
+| `detalle` | jsonb | NOT NULL | `'{}'` | |
+| `estado` | text | NOT NULL | `'pendiente'` | `pendiente|revisada` |
+| `revisada_por_id`, `revisada_at`, `comentario` | | NULL | — | Obligatorios al revisar (`ck_revisiones_revisada_completa`) |
+
+CHECKs: `ck_revisiones_estado_valido`, `ck_revisiones_revisada_completa`. Índices: `uq_revisiones_accion_entidad (accion, entidad_id) WHERE entidad_id IS NOT NULL` (idempotencia: una revisión por acción y documento), `ix_revisiones_sede_estado`. El «día» del reporte es el día calendario de `America/Bogota`.
+
 ### 14.1 `auditoria.log_acciones` — `[A]`, tabla normal (sin particionar)
 > Desde la 0006 también es la fuente del bloqueo por intentos fallidos (§5.14) y tiene el índice `ix_log_acciones_dispositivo`. Convención de `accion`: `modulo.verbo` (`identidad.login_ok`, `pos.pin_fallido`, `cajas.dispositivo_creado`, `identidad.roles_cambiados`…). Nunca se registran contraseñas, PIN ni tokens.
 **Propósito**: quién hizo qué, cuándo, desde dónde y con qué autorización, para las acciones sensibles (descuentos grandes, anulaciones, devoluciones, ajustes de inventario, cierres con diferencia, cambios de precio, reenvíos fiscales, cambios de permisos/PIN, accesos denegados).
@@ -2552,23 +2622,37 @@ Leyenda: **Provisional** = decidido de forma provisional por el negocio, a confi
 
 ## 19. Fases de implementación
 
-### FASE 1 — implementada en `backend/` (84 tablas: 75 iniciales + `productos_busqueda` (0005) + `autorizaciones_consumos` y `sesiones_refresh` (0006) + `importaciones`, `entradas_mercancia` y `entradas_mercancia_lineas` (0007) + `solicitudes_inventario`, `contadores_ean` y `vehiculos_alias` (0008))
+### FASE 1 — implementada en `backend/` (86 tablas con la 0010; 84 hasta la 0009: 75 iniciales + `productos_busqueda` (0005) + `autorizaciones_consumos` y `sesiones_refresh` (0006) + `importaciones`, `entradas_mercancia` y `entradas_mercancia_lineas` (0007) + `solicitudes_inventario`, `contadores_ean` y `vehiculos_alias` (0008))
 Schemas: `referencia`, `organizacion`, `identidad`, `catalogo`, `inventario` (parcial), `cajas`, `ventas`, `fiscal`, `sync`, `auditoria`.
 
 | Schema | Tablas de la Fase 1 |
 |---|---|
 | `referencia` (12) | tipos_documento_identidad, tipos_persona, regimenes, responsabilidades_fiscales, tributos, medios_pago, formas_pago, unidades_medida, departamentos, municipios, tipos_documento_fiscal, conceptos_nota |
 | `organizacion` (5) | empresas, empresas_responsabilidades, sedes, nodos, configuracion_sede |
-| `identidad` (13) | empleados, roles, permisos, roles_permisos, empleados_roles, empleados_sedes, terceros, terceros_responsabilidades, cuentas_clientes, direcciones, autorizaciones, autorizaciones_consumos, sesiones_refresh |
+| `identidad` (14) | solicitudes_autorizacion (0010), empleados, roles, permisos, roles_permisos, empleados_roles, empleados_sedes, terceros, terceros_responsabilidades, cuentas_clientes, direcciones, autorizaciones, autorizaciones_consumos, sesiones_refresh |
 | `catalogo` (17) | categorias, marcas, impuestos, productos, productos_busqueda, productos_codigos_barras, productos_referencias, vehiculos_marcas, vehiculos_modelos, vehiculos_versiones, productos_compatibilidades, productos_imagenes, listas_precios, terceros_listas_precios, precios, vehiculos_alias, contadores_ean |
 | `inventario` (11) | bodegas, ubicaciones, productos_ubicaciones, movimientos_inventario, existencias, reservas_stock, alertas_stock, importaciones, entradas_mercancia, entradas_mercancia_lineas, solicitudes_inventario |
 | `cajas` (7) | cajas, perifericos, dispositivos, turnos, motivos_movimiento_caja, movimientos_caja, arqueos_turno |
 | `ventas` (7) | motivos_devolucion, ventas, ventas_items, ventas_pagos, devoluciones, devoluciones_items, devoluciones_pagos |
 | `fiscal` (7) | configuracion_proveedor, resoluciones_numeracion, documentos_fiscales, documentos_fiscales_items, documentos_fiscales_impuestos, documentos_fiscales_pagos, documentos_fiscales_eventos |
 | `sync` (4) | outbox_eventos, inbox_eventos, cursores_sync, conflictos_sync |
-| `auditoria` (1) | log_acciones |
+| `auditoria` (2) | log_acciones, revisiones (0010) |
 
 Notas de Fase 1: (i) `productos_ubicaciones` y `alertas_stock` entran porque la política de stock negativo y el alistamiento las necesitan; los **ajustes manuales** (`ajustes_inventario`) llegan en Fase 2, pero el kardex ya admite los tipos `ajuste_*`/`traslado_*` (origen polimórfico, sin FK). (ii) `fiscal.documentos_fiscales` nace **sin** la columna `documento_soporte_id` y sin `pedido_id`. (iii) `identidad.cuentas_clientes` y `direcciones` existen aunque el e-commerce llegue en Fase 3.
+
+### Migración 0009 — turnos, ventas POS y devoluciones (sin tablas nuevas)
+* `inventario.bodegas.tipo` + CHECKs + índice único de averías (§7.1). `cajas.turnos`: `umbral_diferencia`, `cierre_forzado`, `motivo_cierre_forzado` y `ck_turnos_diferencia_autorizada` (§9.4).
+* Semillas: permisos `cajas.turno.abrir`, `cajas.turno.cerrar`, `cajas.movimientos`, `cajas.cierre_forzado`, `pos.cambiar_precio`, `ventas.ver` (los existentes `pos.vender`, `pos.descuento_mayor`, `pos.devolver`, `pos.precio_manual`, `pos.retirar_efectivo`, `caja.cerrar_con_diferencia` se reutilizan); motivos de movimiento de caja y de devolución; las 8 claves de `configuracion_sede` por sede existente (§4.5).
+* Flujo de arranque: `inicializar` (empresa + sede + nodo edge + configuración) → `NODO_ID` en `.env` → `crear-admin` → `datos-demo` (opcional). La demo usa resoluciones **FE** (prefijo `DEMO`) y **NC** (`DNC`); la anterior usaba `POS_E`, que `crear_fe_de_venta` no usa.
+* Las ventas confirmadas crean la FE en `pendiente_envio` (prefijo y consecutivo NULL: los asigna el proveedor, modo `proveedor`) y los eventos `venta.confirmada` y `fiscal.emitir`; las devoluciones crean la NC referenciando la FE. Sin llamadas a Factus todavía.
+
+### Migración 0010 — políticas de autorización, revisión posterior, aprobación remota y vendedor/cajero (2 tablas nuevas → 86 en total)
+* Tablas: `auditoria.revisiones` (§14.2) e `identidad.solicitudes_autorizacion` (§5.15), ambas `[M]` con `version` y trigger `tg_tocar`.
+* `ventas.ventas.cajero_id` (FK, `ix_ventas_cajero`; relleno de las ventas POS existentes con `created_by`) + `ck_ventas_confirmada_cajero`; `ck_ventas_canal_pos` relajado para el borrador (§10.1).
+* Se elimina `ck_turnos_diferencia_autorizada` (§9.4).
+* Permisos: `pos.precio_manual` se fusiona en `pos.cambiar_precio` (roles y autorizaciones existentes migrados); nuevos `autorizaciones.aprobar` y `revisiones.gestionar`; nuevo rol `vendedor`.
+* Configuración por sede: seis claves `autorizacion.*` nuevas; se retiran tres de la 0009 (§4.5).
+* `datos-demo --catalogo`: ~340 repuestos de demostración, 3 empleados y 5 clientes (ver CLAUDE.md, sección «Demo»).
 
 ### FASE 2 — compras, traslados, conteos, documentos soporte (14 tablas)
 | Schema | Tablas |

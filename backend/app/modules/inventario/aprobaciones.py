@@ -19,9 +19,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errores import Conflicto, NoEncontrado, PermisoDenegado, ReglaNegocio
+from app.core.utiles import snapshot
 from app.modules.auditoria.servicios import registrar_accion
 from app.modules.catalogo.models import Producto
-from app.modules.catalogo.utiles import snapshot
 from app.modules.identidad.servicios import roles_de
 from app.modules.inventario import servicios as inv
 from app.modules.inventario.configuracion import propietario_autoaprueba, umbral_sede

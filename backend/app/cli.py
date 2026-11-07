@@ -1,8 +1,14 @@
 """CLI de administración: `python -m app.cli --help`.
 
-Comandos: crear-admin, nodos listar, datos-demo, inventario verificar, importar.
-Todos validan la configuración al arrancar (qué falta y cómo obtenerlo). Los comandos de arranque inicial
-(crear-admin, nodos listar, datos-demo) no exigen NODO_ID: usan el nodo nube como origen de los datos maestros.
+Comandos: inicializar, crear-admin, nodos listar, datos-demo, inventario verificar, importar.
+Todos validan la configuración al arrancar (qué falta y cómo obtenerlo).
+
+Orden de arranque de una instalación nueva:
+  1. `inicializar` (empresa, sede y nodo EDGE; imprime NODO_ID) -> copiar NODO_ID a .env (MODE=edge);
+  2. `crear-admin` (exige NODO_ID: el admin queda con origen en el edge);
+  3. opcional, solo desarrollo: `datos-demo`.
+`inicializar`, `nodos` y `datos-demo` no exigen NODO_ID (crean o listan los nodos). Todos los comandos usan los
+MISMOS servicios que la API: publican sus eventos en el outbox y dejan su auditoría.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ from app.core.db import cargar_modelos, sesion
 from app.core.errores import ErrorDominio
 
 # comandos que pueden correr antes de que exista el nodo de la sede
-ARRANQUE = {"crear-admin", "nodos", "datos-demo"}
+ARRANQUE = {"inicializar", "nodos", "datos-demo"}
 
 
 def _error(msg: str, codigo: int = 1) -> int:
@@ -30,7 +36,7 @@ def _error(msg: str, codigo: int = 1) -> int:
 
 def crear_admin(args: argparse.Namespace) -> int:
     from app.modules.identidad import empleados as svc_emp
-    from app.modules.organizacion.models import Sede
+    from app.modules.organizacion.models import Nodo, Sede
 
     password = args.password or os.environ.get("ADMIN_PASSWORD") or getpass.getpass("Contraseña del administrador: ")
     if (
@@ -44,6 +50,10 @@ def crear_admin(args: argparse.Namespace) -> int:
             sedes = list(db.scalars(select(Sede.id).where(Sede.codigo.in_(args.sede)))) if args.sede else []
             if len(sedes) != len(args.sede):
                 return _error("Alguna sede indicada no existe (use el código de sede).")
+            if not sedes:  # por defecto, la sede del nodo edge de esta instalación
+                nodo = db.get(Nodo, get_settings().nodo_id)
+                if nodo is not None and nodo.sede_id is not None:
+                    sedes = [nodo.sede_id]
             emp = svc_emp.crear(
                 db,
                 datos=dict(
@@ -83,19 +93,57 @@ def nodos_listar(args: argparse.Namespace) -> int:
     return 0
 
 
-def datos_demo(args: argparse.Namespace) -> int:
-    from app.modules.organizacion.demo import PIN_DEMO, sembrar
+def inicializar(args: argparse.Namespace) -> int:
+    from app.modules.organizacion.servicios import inicializar as svc_inicializar
 
     try:
         with sesion() as db:
-            r = sembrar(db)
+            r = svc_inicializar(
+                db,
+                nit=args.nit,
+                dv=args.dv,
+                razon_social=args.razon_social,
+                nombre_comercial=args.nombre_comercial,
+                sede_codigo=args.sede_codigo,
+                sede_nombre=args.sede_nombre,
+                municipio_codigo=args.municipio,
+                direccion=args.direccion,
+                nodo_nombre=args.nodo_nombre,
+            )
+    except ErrorDominio as e:
+        return _error(f"Error: {e.detail}")
+    print("Creado ahora: " + (", ".join(r.creados) if r.creados else "nada (ya existía todo)"))
+    print(f"NODO_ID (nodo edge) = {r.nodo_edge_id}")
+    print(f"sede_id             = {r.sede_id}")
+    print("Copie NODO_ID en .env (y deje MODE=edge); después ejecute `crear-admin`.")
+    return 0
+
+
+def datos_demo(args: argparse.Namespace) -> int:
+    from app.aplicacion.demo import EMPLEADOS_DEMO, sembrar
+
+    try:
+        with sesion() as db:
+            r = sembrar(db, catalogo=args.catalogo)
     except ErrorDominio as e:
         return _error(f"Error: {e.detail}")
     print("Creado ahora: " + (", ".join(r.creados) if r.creados else "nada (ya existía todo)"))
     print(f"NODO_ID (nodo edge) = {r.nodo_edge_id}")
     print(f"caja_id             = {r.caja_id}")
     print(f"sede_id             = {r.sede_id}")
-    print(f"Cajero demo: carné CAJERO1, PIN {PIN_DEMO}")
+    print(f"bodega_id           = {r.bodega_id}  (averías: {r.bodega_averias_id})")
+    actual = get_settings().nodo_id
+    if actual is not None and actual != r.nodo_edge_id:
+        print(f"AVISO: el NODO_ID de .env ({actual}) no es el de esta base de datos; actualícelo.")
+    for e in EMPLEADOS_DEMO:
+        acceso = f", usuario {e.usuario} / clave {e.password}" if e.usuario else ""
+        print(f"{e.rol.capitalize()} demo: carné {e.carne}, PIN {e.pin}{acceso}")
+    if r.catalogo is not None:
+        c = r.catalogo
+        print(
+            f"Catálogo demo: {c.productos_nuevos} productos nuevos ({c.productos_existentes} ya existían); "
+            f"{c.con_stock} con stock ({c.bajo_minimo} bajo el mínimo), {c.sin_stock} agotados"
+        )
     print("Copie NODO_ID en .env (y deje MODE=edge) para usar este nodo en la API.")
     return 0
 
@@ -166,7 +214,19 @@ def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Administración de MundoRepuestos")
     sub = parser.add_subparsers(dest="comando", required=True)
 
-    p = sub.add_parser("crear-admin", help="Crea el primer administrador (rol 'administrador')")
+    p = sub.add_parser("inicializar", help="Crea empresa, sede y nodo EDGE con su configuración (idempotente)")
+    p.add_argument("--nit", required=True, help="NIT sin dígito de verificación (el DV se calcula)")
+    p.add_argument("--dv", type=int, help="Opcional: se valida contra el calculado")
+    p.add_argument("--razon-social", required=True)
+    p.add_argument("--nombre-comercial")
+    p.add_argument("--sede-codigo", required=True, help="Código de la sede (2-6 caracteres A-Z/0-9)")
+    p.add_argument("--sede-nombre", required=True)
+    p.add_argument("--municipio", default="11001", help="Código DANE del municipio (por defecto Bogotá)")
+    p.add_argument("--direccion", default="Sin dirección")
+    p.add_argument("--nodo-nombre")
+    p.set_defaults(func=inicializar)
+
+    p = sub.add_parser("crear-admin", help="Crea el primer administrador (exige NODO_ID: tras `inicializar`)")
     p.add_argument("--usuario", required=True)
     p.add_argument("--documento", required=True, help="Número de documento")
     p.add_argument("--tipo-documento", default="13", help="Código DIAN (13 = cédula)")
@@ -182,7 +242,11 @@ def construir_parser() -> argparse.ArgumentParser:
     q = ns.add_parser("listar", help="Lista los nodos y marca el NODO_ID actual")
     q.set_defaults(func=nodos_listar)
 
-    p = sub.add_parser("datos-demo", help="Siembra empresa, sede, nodo edge, bodega, caja y cajero (idempotente)")
+    p = sub.add_parser(
+        "datos-demo",
+        help="Siembra empresa, sede, nodo edge, bodega, caja, 3 empleados y 5 clientes (idempotente)",
+    )
+    p.add_argument("--catalogo", action="store_true", help="Carga además ~300 repuestos realistas con stock y precios")
     p.set_defaults(func=datos_demo)
 
     p = sub.add_parser("inventario", help="Herramientas de inventario")
@@ -212,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         arranque = args.comando in ARRANQUE
         cfg = validar_configuracion(requiere_nodo=not arranque)
         if arranque and cfg.nodo_id is None:
-            cfg.nodo_id = NODO_NUBE_ID  # datos maestros de arranque: origen = nodo nube (existe por la migración 0004)
+            cfg.nodo_id = NODO_NUBE_ID  # solo para listar: `inicializar` y `datos-demo` fijan el nodo edge que crean
         elif not arranque:
             from app.modules.organizacion.nodos import verificar_nodo
 

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import NODO_NUBE_ID, get_settings
 from app.core.errores import Conflicto, NoEncontrado, ReglaNegocio
+from app.core.utiles import snapshot
 from app.modules.auditoria.servicios import registrar_accion
 from app.modules.catalogo.models import (
     Categoria,
@@ -35,7 +36,7 @@ from app.modules.catalogo.models import (
     VehiculoModelo,
     VehiculoVersion,
 )
-from app.modules.catalogo.utiles import CONSECUTIVO_EAN_MAX, ean13_interno, gs1_valido, sin_acentos, slugify, snapshot
+from app.modules.catalogo.utiles import CONSECUTIVO_EAN_MAX, ean13_interno, gs1_valido, sin_acentos, slugify
 from app.modules.organizacion.models import Nodo
 from app.modules.sync.servicios import publicar_evento
 

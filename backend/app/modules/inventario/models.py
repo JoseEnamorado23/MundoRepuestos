@@ -73,10 +73,18 @@ EstadoAlerta = pg_enum(SCHEMA, "estado_alerta", "abierta", "reconocida", "resuel
 
 class Bodega(Base, Mutable):
     __tablename__ = "bodegas"
-    __table_args__ = (UniqueConstraint("sede_id", "codigo", name="uq_bodegas_sede_codigo"), {"schema": SCHEMA})
+    __table_args__ = (
+        UniqueConstraint("sede_id", "codigo", name="uq_bodegas_sede_codigo"),
+        CheckConstraint("tipo IN ('general','averias')", name="tipo_valido"),
+        CheckConstraint("tipo <> 'averias' OR NOT es_vendible", name="averias_no_vendible"),
+        # una sola bodega de averías activa por sede (destino de las devoluciones defectuosas; 0009)
+        Index("uq_bodegas_averias_sede", "sede_id", unique=True, postgresql_where=text("tipo = 'averias' AND activo")),
+        {"schema": SCHEMA},
+    )
     sede_id: Mapped[uuid.UUID] = fk("organizacion.sedes.id")
     codigo: Mapped[str] = txt()
     nombre: Mapped[str] = txt()
+    tipo: Mapped[str] = txt(server_default="general")  # 'general' | 'averias' (no vendible)
     es_vendible: Mapped[bool] = flag(True)
     activo: Mapped[bool] = flag(True)
 
