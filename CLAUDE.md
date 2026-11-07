@@ -72,11 +72,16 @@ docker compose exec db sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'
 
 ### Puesta en marcha inicial (paso a paso)
 1. `cp .env.example .env` y completar: `DATABASE_URL`/`DB_PORT`, `JWT_SECRET` y `PIN_PEPPER` (generar con `uv run python -c "import secrets; print(secrets.token_urlsafe(48))"`), `ENV=desarrollo`. Si falta algo, la API y el CLI se detienen indicando qué falta y cómo obtenerlo.
-2. `docker compose up -d db` · `cd backend` · `uv sync` · `uv run alembic upgrade head`.
-3. `uv run python -m app.cli crear-admin ...` (primer administrador).
+2. `docker compose up -d db` · `cd backend` · `uv sync`.
+   **Recrear la BD de desarrollo desde cero** (DESTRUCTIVO: borra todos sus datos; no toca `mundorepuestos_test`). Desde la raíz del repo, con los valores de `POSTGRES_USER`/`POSTGRES_DB` del `.env`:
+   `docker compose exec db sh -c 'psql -U $POSTGRES_USER -d postgres -c "DROP DATABASE IF EXISTS $POSTGRES_DB WITH (FORCE)" -c "CREATE DATABASE $POSTGRES_DB OWNER $POSTGRES_USER"'`
+   **Importante:** deja `NODO_ID=` vacío en `.env` antes de seguir. Si conserva el id del edge de una BD anterior, `crear-admin` y `datos-demo` fallan con `ForeignKeyViolation ... fk_*_nodo_origen_id_nodos` (solo usan el nodo nube cuando `NODO_ID` está vacío).
+   Luego: `uv run alembic upgrade head` (`alembic current` debe mostrar `0008 (head)`).
+3. `uv run python -m app.cli crear-admin ...` (primer administrador). En modo no interactivo (scripts, CI) la clave se pasa con la variable `ADMIN_PASSWORD`; de lo contrario se pide sin eco.
 4. `uv run python -m app.cli datos-demo`: imprime `NODO_ID (nodo edge) = ...` y `caja_id = ...`.
 5. En `.env` poner `NODO_ID=<ese id>` y `MODE=edge` (el arranque verifica que el nodo exista, esté activo y que MODE coincida con su tipo; `nodos listar` muestra los disponibles). Luego arrancar la API con el comando uvicorn de arriba.
-Los comandos de arranque (`crear-admin`, `nodos`, `datos-demo`) no exigen `NODO_ID`; los datos maestros que crean usan el nodo nube como origen.
+Los comandos de arranque (`crear-admin`, `nodos`, `datos-demo`) no exigen `NODO_ID`; con `NODO_ID` vacío usan el nodo nube como origen (el admin y su auditoría); `datos-demo` crea empresa, sede, bodega, caja, resolución y cajero con origen en el nodo edge.
+6. Verificar: `uv run alembic check`, `uv run pytest` (~4 min), `uv run ruff check .`, `uv run ruff format --check .`.
 
 ### Probar el flujo POS en Swagger (`/api/v1/docs`)
 1. **Registrar dispositivo** (backoffice): `POST /auth/login` con el admin → *Authorize* con el access token → `POST /cajas/dispositivos` con `{"caja_id": "<caja_id de datos-demo>", "nombre": "POS 1"}`; guardar el `token` (solo se muestra una vez).
