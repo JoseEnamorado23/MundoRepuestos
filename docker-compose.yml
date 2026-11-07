@@ -1,0 +1,39 @@
+name: mundorepuestos
+
+services:
+  db:
+    image: postgres:16
+    container_name: mundorepuestos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: America/Bogota
+      PGTZ: America/Bogota
+    ports:
+      - "${DB_PORT:-5460}:5432"
+    volumes:
+      - mundorepuestos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  adminer:
+    image: adminer:latest
+    container_name: mundorepuestos-adminer
+    profiles: ["tools"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+
+volumes:
+  mundorepuestos_pgdata:

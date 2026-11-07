@@ -1,0 +1,33 @@
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+dist/
+
+# Datos / backups locales
+*.dump
+*.sql.gz
+backups/
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# imagenes subidas (almacenamiento local)
+media/
