@@ -59,6 +59,37 @@ def detalle_venta(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -
     return _detalle(db, svc.obtener_venta(db, venta_id, sede_id))
 
 
+_LEYENDAS = {
+    None: "Factura electrónica pendiente de validación ante la DIAN",
+    "borrador": "Factura electrónica pendiente de validación ante la DIAN",
+    "pendiente_envio": "Factura electrónica pendiente de validación ante la DIAN",
+    "enviado": "Factura electrónica en validación ante la DIAN",
+    "rechazado": "Factura electrónica en revisión: la tienda la regularizará ante la DIAN",
+    "contingencia": "Factura en contingencia: se enviará a la DIAN cuando se restablezca el servicio",
+}
+
+
+def _estado_fiscal(doc: DocumentoFiscal | None) -> dict:
+    """Estado fiscal para la tirilla y el POS: número, CUFE y QR cuando está aceptado; si no, una leyenda."""
+    aceptado = doc is not None and doc.estado == "aceptado"
+    return {
+        "documento_id": doc.id if doc else None,
+        "tipo": doc.tipo_documento_codigo if doc else None,
+        "estado": doc.estado if doc else None,
+        "numero_completo": doc.numero_completo if doc else None,
+        "cufe": doc.cufe_cude if doc else None,
+        "qr_data": doc.qr_data if doc else None,
+        "leyenda": None if aceptado else _LEYENDAS.get(doc.estado if doc else None),
+        "definitivo": aceptado,  # el POS deja de consultar cuando es True
+    }
+
+
+def estado_fiscal(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -> dict:
+    """Consulta liviana para que el POS siga el estado de la FE después de confirmar la venta."""
+    v = svc.obtener_venta(db, venta_id, sede_id)
+    return {"venta_id": v.id, **_estado_fiscal(fiscal.fe_vigente_de_venta(db, v.id))}
+
+
 def ticket(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -> dict:
     """Todos los datos de la tirilla (empresa, sede, resolución, ítems, impuestos, totales, pagos, estado fiscal)."""
     v = svc.obtener_venta(db, venta_id, sede_id)
@@ -79,7 +110,6 @@ def ticket(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -> dict:
         a = impuestos.setdefault((i.impuesto_codigo, i.tarifa_pct), [Decimal("0"), Decimal("0")])
         a[0] += i.base_gravable
         a[1] += i.impuesto_valor
-    pendiente = doc is None or doc.numero_completo is None
 
     def nombre(e: Empleado | None) -> str | None:
         return f"{e.nombres} {e.apellidos}" if e else None
@@ -158,13 +188,5 @@ def ticket(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -> dict:
             for p in pagos
         ],
         "cambio_total": sum((p.cambio_devuelto for p in pagos), Decimal("0.00")),
-        "fiscal": {
-            "documento_id": doc.id if doc else None,
-            "tipo": doc.tipo_documento_codigo if doc else None,
-            "estado": doc.estado if doc else None,
-            "numero_completo": doc.numero_completo if doc else None,
-            "cufe": doc.cufe_cude if doc else None,
-            "qr_data": doc.qr_data if doc else None,
-            "leyenda": "Factura electrónica pendiente de validación ante la DIAN" if pendiente else None,
-        },
+        "fiscal": _estado_fiscal(doc),
     }

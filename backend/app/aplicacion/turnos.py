@@ -53,7 +53,6 @@ def cerrar_turno(
     actor,
     *,
     conteo: dict[str, Decimal],
-    autorizacion_id: uuid.UUID | None,
     observaciones: str | None,
 ) -> dict:
     """Cierre con conteo ciego; devuelve el informe (con lo esperado). La diferencia de arqueo NUNCA bloquea."""
@@ -63,7 +62,6 @@ def cerrar_turno(
         actor,
         turno,
         conteo=conteo,
-        autorizacion_id=autorizacion_id,
         observaciones=observaciones,
         totales=totales_turno(db, turno.id),
     )

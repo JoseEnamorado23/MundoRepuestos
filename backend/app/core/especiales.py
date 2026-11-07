@@ -59,3 +59,53 @@ INDICES_ESPECIALES = {
     "brin_movimientos_inventario_ocurrido",
     "brin_documentos_fiscales_eventos_ocurrido",
 }
+
+
+# Índices de FK creados en la migración 0011 (nombre = ix_<tabla>_<columna>); no están declarados en los modelos.
+# Regla de modelo.md §1.9: toda FK de la Fase 1 lleva índice, salvo created_by, nodo_origen_id, nodo_destino_id, las FK a
+# `referencia.*` y el schema `auditoria` (ver `tests/test_fk_indices.py`).
+INDICES_FK = (
+    ("cajas", "cajas", "bodega_id"),
+    ("cajas", "movimientos_caja", "autorizacion_id"),
+    ("cajas", "movimientos_caja", "motivo_id"),
+    ("cajas", "turnos", "autorizacion_cierre_id"),
+    ("cajas", "turnos", "cerrado_por_id"),
+    ("cajas", "turnos", "dispositivo_id"),
+    ("cajas", "turnos", "supervisor_cierre_id"),
+    ("catalogo", "precios", "lista_precio_id"),
+    ("catalogo", "precios", "sede_id"),
+    ("catalogo", "productos", "impuesto_id"),
+    ("catalogo", "productos_referencias", "marca_id"),
+    ("catalogo", "terceros_listas_precios", "lista_precio_id"),
+    ("fiscal", "documentos_fiscales", "adquirente_tercero_id"),
+    ("fiscal", "documentos_fiscales", "caja_id"),
+    ("fiscal", "documentos_fiscales_items", "devolucion_item_id"),
+    ("fiscal", "documentos_fiscales_items", "producto_id"),
+    ("fiscal", "documentos_fiscales_items", "venta_item_id"),
+    ("identidad", "autorizaciones", "permiso_codigo"),
+    ("identidad", "autorizaciones", "solicitado_por_id"),
+    ("identidad", "autorizaciones_consumos", "consumida_por_id"),
+    ("identidad", "solicitudes_autorizacion", "accion"),
+    ("identidad", "solicitudes_autorizacion", "autorizacion_id"),
+    ("identidad", "solicitudes_autorizacion", "resuelta_por_id"),
+    ("identidad", "terceros", "fusionado_en_id"),
+    ("inventario", "alertas_stock", "movimiento_id"),
+    ("inventario", "alertas_stock", "producto_id"),
+    ("inventario", "alertas_stock", "resuelta_por_id"),
+    ("inventario", "entradas_mercancia_lineas", "producto_id"),
+    ("inventario", "reservas_stock", "movimiento_id"),
+    ("inventario", "reservas_stock", "producto_id"),
+    ("inventario", "solicitudes_inventario", "bodega_id"),
+    ("inventario", "solicitudes_inventario", "resuelta_por_id"),
+    ("inventario", "solicitudes_inventario", "solicitada_por_id"),
+    ("organizacion", "configuracion_sede", "sede_id"),
+    ("sync", "conflictos_sync", "resuelto_por_id"),
+    ("ventas", "devoluciones", "autorizacion_id"),
+    ("ventas", "devoluciones", "motivo_id"),
+    ("ventas", "devoluciones_items", "bodega_reintegro_id"),
+    ("ventas", "devoluciones_items", "producto_id"),
+    ("ventas", "ventas", "lista_precio_id"),
+    ("ventas", "ventas_items", "autorizacion_id"),
+    ("ventas", "ventas_items", "bodega_id"),
+)
+INDICES_ESPECIALES = INDICES_ESPECIALES | {f"ix_{t}_{c}" for _s, t, c in INDICES_FK} | {"ix_outbox_eventos_fiscal"}

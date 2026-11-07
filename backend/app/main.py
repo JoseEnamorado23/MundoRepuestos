@@ -23,6 +23,7 @@ from app.modules.cajas.router_turnos import forzado_router
 from app.modules.cajas.router_turnos import router as turnos_router
 from app.modules.catalogo.router import escaner_router
 from app.modules.catalogo.router import router as catalogo_router
+from app.modules.fiscal.router import router as fiscal_router
 from app.modules.identidad.router import auth_router, empleados_router
 from app.modules.inventario.router import router as inventario_router
 from app.modules.organizacion.nodos import verificar_nodo
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     v1.include_router(escaner_router)
     v1.include_router(catalogo_router)
     v1.include_router(inventario_router)
+    v1.include_router(fiscal_router)
     app.include_router(v1)
     return app
 

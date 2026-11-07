@@ -75,10 +75,6 @@ class CierreIn(BaseModel):
         min_length=1,
         description="Lo CONTADO por medio de pago (el efectivo es obligatorio). No se muestra lo esperado.",
     )
-    autorizacion_id: uuid.UUID | None = Field(
-        None,
-        description="Obsoleto e ignorado: la diferencia de arqueo ya no bloquea el cierre (queda en revisión posterior)",
-    )
     observaciones: str | None = Field(None, max_length=500)
 
 
@@ -162,7 +158,6 @@ def cerrar_turno(datos: CierreIn, db: Db, actor: PuedeCerrar):
             db,
             actor,
             conteo=_conteo(datos.conteo),
-            autorizacion_id=datos.autorizacion_id,
             observaciones=datos.observaciones,
         )
 
@@ -208,7 +203,6 @@ class MotivoOut(BaseModel):
     codigo: str
     nombre: str
     tipo: str | None = None
-    requiere_autorizacion: bool
 
 
 @router.get(
@@ -216,7 +210,7 @@ class MotivoOut(BaseModel):
 )
 def motivos_caja(db: Db, actor: PuedeMover):
     return [
-        MotivoOut(codigo=m.codigo, nombre=m.nombre, tipo=m.tipo, requiere_autorizacion=m.requiere_autorizacion)
+        MotivoOut(codigo=m.codigo, nombre=m.nombre, tipo=m.tipo)
         for m in db.scalars(
             select(MotivoMovimientoCaja).where(MotivoMovimientoCaja.activo).order_by(MotivoMovimientoCaja.nombre)
         )

@@ -12,11 +12,11 @@
 
 | Rol | Permisos |
 |---|---|
-| `administrador` | 35 |
+| `administrador` | 33 |
 | `bodeguero` | 7 |
-| `cajero` | 11 |
-| `propietario` | 35 |
-| `supervisor` | 32 |
+| `cajero` | 9 |
+| `propietario` | 33 |
+| `supervisor` | 30 |
 | `vendedor` | 5 |
 
 ## Permisos
@@ -26,8 +26,6 @@
 | `admin.configuracion` | admin | Administrar configuración de sede, cajas y resoluciones | no | `administrador`, `propietario` |
 | `admin.usuarios` | admin | Administrar empleados, roles y permisos | no | `administrador`, `propietario` |
 | `autorizaciones.aprobar` | autorizaciones | Aprobar o rechazar solicitudes de autorización remotas | no | `administrador`, `propietario`, `supervisor` |
-| `caja.abrir` | caja | Abrir turno de caja | no | `administrador`, `cajero`, `propietario`, `supervisor` |
-| `caja.cerrar` | caja | Cerrar turno de caja | no | `administrador`, `cajero`, `propietario`, `supervisor` |
 | `caja.cerrar_con_diferencia` | caja | Cerrar turno con faltante o sobrante | sí | `administrador`, `propietario`, `supervisor` |
 | `cajas.cierre_forzado` | cajas | Cerrar a la fuerza el turno abandonado de otro cajero | no | `administrador`, `propietario`, `supervisor` |
 | `cajas.dispositivos.gestionar` | cajas | Registrar, listar y revocar dispositivos POS | no | `administrador`, `propietario` |
@@ -39,7 +37,7 @@
 | `catalogo.ver` | catalogo | Consultar y buscar productos, precios y compatibilidades | no | `administrador`, `bodeguero`, `cajero`, `propietario`, `supervisor`, `vendedor` |
 | `precios.editar` | catalogo | Fijar precios de productos | no | `administrador`, `propietario`, `supervisor` |
 | `compras.recibir` | compras | Recibir mercancía de proveedores | no | `administrador`, `bodeguero`, `propietario`, `supervisor` |
-| `fiscal.reenviar` | fiscal | Reenviar documentos al proveedor tecnológico | no | `administrador`, `propietario`, `supervisor` |
+| `fiscal.gestionar` | fiscal | Gestionar documentos fiscales: reintentar rechazados o con reintentos agotados y resolver alertas | no | `administrador`, `propietario`, `supervisor` |
 | `fiscal.ver` | fiscal | Consultar documentos fiscales | no | `administrador`, `cajero`, `propietario`, `supervisor` |
 | `inventario.ajustar` | inventario | Ajustar inventario manualmente | sí | `administrador`, `propietario`, `supervisor` |
 | `inventario.aprobar` | inventario | Aprobar o rechazar entradas y ajustes sobre el umbral | no | `administrador`, `propietario`, `supervisor` |

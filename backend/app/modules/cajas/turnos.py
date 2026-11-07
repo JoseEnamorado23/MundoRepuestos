@@ -12,8 +12,8 @@ Todo opera con la sesión POS (dispositivo + PIN): la caja sale del dispositivo,
   confirmar y no se confirma una venta en un turno que se está cerrando (la fila se reevalúa al desbloquearse).
 * Los totales de ventas/devoluciones (`TotalesTurno`) los calcula el caso de uso (app/aplicacion) con el módulo
   `ventas` y los pasa como datos: `cajas` no importa `ventas`.
-* La diferencia de arqueo NUNCA bloquea el cierre salvo que la sede configure la política `requiere_autorizacion`
-  (`autorizacion.diferencia_arqueo`); por defecto es `revision_posterior` (queda en `auditoria.revisiones`).
+* La diferencia de arqueo NUNCA bloquea el cierre (la política `autorizacion.diferencia_arqueo` no admite
+  `requiere_autorizacion`); por defecto es `revision_posterior` (queda en `auditoria.revisiones`).
 """
 
 from __future__ import annotations
@@ -257,7 +257,6 @@ def _cerrar(
     cerrador_id: uuid.UUID,
     conteo: dict[str, Decimal] | None,
     totales: TotalesTurno,
-    autorizacion_id: uuid.UUID | None,
     actor,
     observaciones: str | None,
     forzado: bool,
@@ -384,7 +383,6 @@ def cerrar_turno(
     turno: Turno,
     *,
     conteo: dict[str, Decimal],
-    autorizacion_id: uuid.UUID | None,
     observaciones: str | None,
     totales: TotalesTurno,
 ) -> Turno:
@@ -397,7 +395,6 @@ def cerrar_turno(
         cerrador_id=sesion.empleado.id,
         conteo=conteo,
         totales=totales,
-        autorizacion_id=autorizacion_id,
         actor=actor,
         observaciones=observaciones,
         forzado=False,
@@ -445,7 +442,6 @@ def cierre_forzado(
         cerrador_id=supervisor_id,
         conteo=conteo,
         totales=totales,
-        autorizacion_id=None,
         actor=None,
         observaciones=None,
         forzado=True,

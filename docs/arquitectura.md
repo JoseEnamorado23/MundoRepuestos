@@ -23,6 +23,7 @@ api  ->  aplicacion  ->  modules (servicios)  ->  core
 | Archivo | Casos de uso | Coordina |
 |---------|--------------|----------|
 | `ventas.py` | `confirmar_venta` (venta + factura electrónica `pendiente_envio`), `suspender_venta`, `retomar_espera`, `detalle_venta`, `ticket` | ventas + fiscal |
+| `workers/fiscal.py` (fuera de `aplicacion/`) | worker fiscal: envía los documentos `pendiente_envio` al proveedor (`modules/fiscal/emision.py`) | fiscal + sync |
 | `devoluciones.py` | `registrar_devolucion` (kardex, reembolso y nota crédito `pendiente_envio`), `detalle_devolucion` | ventas + fiscal |
 | `turnos.py` | `abrir_turno`, `registrar_movimiento_caja`, `cerrar_turno`, `cierre_forzado`, `informe_cierre` | cajas + ventas (totales del turno) |
 | `demo.py`, `catalogo_demo.py` | `datos-demo [--catalogo]` | organizacion + identidad + cajas + fiscal + inventario + catalogo + ventas |

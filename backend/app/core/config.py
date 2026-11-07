@@ -73,7 +73,41 @@ class Settings(BaseSettings):
     # --- Autorización de supervisor ---
     autorizacion_ttl_seg: int = Field(120, validation_alias=_alias("autorizacion_ttl_seg"))
 
-    @field_validator("nodo_id", "database_url", "jwt_secret", "pin_pepper", mode="before")
+    # --- Facturación electrónica (proveedor tecnológico) ---
+    # factus = API real de Factus (sandbox o producción según FACTUS_URL); simulado = proveedor ficticio (pruebas/demo)
+    fiscal_proveedor: Literal["factus", "simulado"] = Field("factus", validation_alias=_alias("fiscal_proveedor"))
+    factus_url: str | None = Field(None, validation_alias=_alias("factus_url"))
+    factus_client_id: str | None = Field(None, validation_alias=_alias("factus_client_id"))
+    factus_client_secret: str | None = Field(None, validation_alias=_alias("factus_client_secret"))
+    factus_username: str | None = Field(None, validation_alias=_alias("factus_username"))
+    factus_password: str | None = Field(None, validation_alias=_alias("factus_password"))
+    # usar el almacén de certificados del sistema (necesario tras un proxy TLS corporativo); false = certifi
+    fiscal_certificados_sistema: bool = Field(True, validation_alias=_alias("fiscal_certificados_sistema"))
+    fiscal_timeout_conexion_seg: float = Field(10.0, validation_alias=_alias("fiscal_timeout_conexion_seg"))
+    fiscal_timeout_lectura_seg: float = Field(60.0, validation_alias=_alias("fiscal_timeout_lectura_seg"))
+    # worker fiscal: reintentos con backoff exponencial + jitter (segundos) y máximo de intentos por documento
+    fiscal_max_intentos: int = Field(8, ge=1, le=50, validation_alias=_alias("fiscal_max_intentos"))
+    fiscal_backoff_base_seg: float = Field(10.0, gt=0, validation_alias=_alias("fiscal_backoff_base_seg"))
+    fiscal_backoff_max_seg: float = Field(1800.0, gt=0, validation_alias=_alias("fiscal_backoff_max_seg"))
+    fiscal_worker_intervalo_seg: float = Field(5.0, gt=0, validation_alias=_alias("fiscal_worker_intervalo_seg"))
+    # el worker se considera caído si su último latido es más viejo que esto
+    fiscal_worker_latido_max_seg: int = Field(60, ge=5, validation_alias=_alias("fiscal_worker_latido_max_seg"))
+    # simulado: latencia artificial (ms) y proporción de rechazos [0,1] para demos/pruebas
+    fiscal_simulado_latencia_ms: int = Field(0, ge=0, validation_alias=_alias("fiscal_simulado_latencia_ms"))
+    fiscal_simulado_rechazos: float = Field(0.0, ge=0.0, le=1.0, validation_alias=_alias("fiscal_simulado_rechazos"))
+
+    @field_validator(
+        "nodo_id",
+        "database_url",
+        "jwt_secret",
+        "pin_pepper",
+        "factus_url",
+        "factus_client_id",
+        "factus_client_secret",
+        "factus_username",
+        "factus_password",
+        mode="before",
+    )
     @classmethod
     def _vacio_es_none(cls, v):
         """Una variable vacía en .env (copiada de .env.example) equivale a 'no definida'."""

@@ -142,7 +142,6 @@ class MotivoMovimientoCaja(Base, Mutable):
     codigo: Mapped[str] = txt()
     nombre: Mapped[str] = txt()
     tipo: Mapped[str] = txt()
-    requiere_autorizacion: Mapped[bool] = flag(False)
     activo: Mapped[bool] = flag(True)
 
 

@@ -1,6 +1,6 @@
 """CLI de administración: `python -m app.cli --help`.
 
-Comandos: inicializar, crear-admin, nodos listar, datos-demo, inventario verificar, importar.
+Comandos: inicializar, crear-admin, nodos listar, datos-demo, inventario verificar, importar, fiscal.
 Todos validan la configuración al arrancar (qué falta y cómo obtenerlo).
 
 Orden de arranque de una instalación nueva:
@@ -210,6 +210,119 @@ def importar(args: argparse.Namespace) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------------------------------ fiscal
+def _proveedor_factus():
+    from app.modules.fiscal.proveedores import crear_proveedor
+    from app.modules.fiscal.proveedores.factus import ProveedorFiscalFactus
+
+    cfg = get_settings()
+    cfg_f = cfg.model_copy(update={"fiscal_proveedor": "factus"})
+    prov = crear_proveedor(cfg_f)
+    assert isinstance(prov, ProveedorFiscalFactus)
+    return prov
+
+
+def fiscal_rangos(args: argparse.Namespace) -> int:
+    """Rangos de numeración de la empresa en Factus (los `id` se guardan en `resoluciones_numeracion.id_rango_proveedor`)."""
+    from app.modules.fiscal.proveedores.base import ErrorProveedor
+
+    prov = _proveedor_factus()
+    try:
+        rangos = prov.listar_rangos()
+    except ErrorProveedor as e:
+        return _error(f"No se pudieron leer los rangos de Factus: {e.mensaje}")
+    finally:
+        prov.cerrar()
+    print(f"{'id':>6}  {'documento':<28} {'prefijo':<8} {'desde':>12} {'hasta':>12} {'actual':>12}  activo")
+    for r in rangos:
+        print(
+            f"{r.get('id')!s:>6}  {str(r.get('document'))[:28]:<28} {str(r.get('prefix')):<8} "
+            f"{r.get('from')!s:>12} {r.get('to')!s:>12} {r.get('current')!s:>12}  "
+            f"{'si' if r.get('is_active') in (1, True) else 'no'}"
+        )
+    return 0
+
+
+def fiscal_verificar(args: argparse.Namespace) -> int:
+    """Comprueba la conexión con Factus y que cada resolución activa apunte a un rango existente y activo."""
+    from sqlalchemy import select as _select
+
+    from app.modules.fiscal.models import ResolucionNumeracion
+    from app.modules.fiscal.proveedores.base import ErrorProveedor
+
+    prov = _proveedor_factus()
+    try:
+        rangos = {str(r.get("id")): r for r in prov.listar_rangos()}
+    except ErrorProveedor as e:
+        return _error(f"Sin conexión con Factus: {e.mensaje}")
+    finally:
+        prov.cerrar()
+    print(f"Conexión con Factus correcta ({len(rangos)} rangos).")
+    problemas = 0
+    with sesion() as db:
+        for r in db.scalars(_select(ResolucionNumeracion).where(ResolucionNumeracion.estado == "activa")):
+            rango = rangos.get(str(r.id_rango_proveedor))
+            if rango is None:
+                estado = "SIN RANGO EN FACTUS" if r.id_rango_proveedor else "SIN id_rango_proveedor"
+            elif rango.get("is_active") not in (1, True):
+                estado = "RANGO INACTIVO EN FACTUS"
+            else:
+                estado = "ok"
+            problemas += estado != "ok"
+            print(
+                f"  {r.tipo_documento_codigo} {r.prefijo:<6} resolución {r.id} -> rango {r.id_rango_proveedor}: {estado}"
+            )
+    return 1 if problemas else 0
+
+
+def fiscal_vincular(args: argparse.Namespace) -> int:
+    """Asigna a una resolución local el id de rango de Factus (verifica que el rango exista y sea del mismo tipo)."""
+    import uuid as _uuid
+
+    from app.modules.fiscal.models import ResolucionNumeracion
+    from app.modules.fiscal.proveedores.base import ErrorProveedor
+
+    prov = _proveedor_factus()
+    try:
+        rangos = {str(r.get("id")): r for r in prov.listar_rangos()}
+    except ErrorProveedor as e:
+        return _error(f"Sin conexión con Factus: {e.mensaje}")
+    finally:
+        prov.cerrar()
+    rango = rangos.get(str(args.rango_id))
+    if rango is None:
+        return _error(f"El rango {args.rango_id} no existe en Factus (use `fiscal rangos`).")
+    with sesion() as db:
+        res = db.get(ResolucionNumeracion, _uuid.UUID(args.resolucion_id))
+        if res is None:
+            return _error("Resolución no encontrada.")
+        res.id_rango_proveedor = str(args.rango_id)
+        db.commit()
+        print(
+            f"Resolución {res.id} ({res.tipo_documento_codigo} {res.prefijo}) vinculada al rango {args.rango_id} de Factus."
+        )
+    return 0
+
+
+def fiscal_estado(args: argparse.Namespace) -> int:
+    """Documentos por atender, rechazados, alertas abiertas y latido del worker."""
+    from sqlalchemy import func as _func
+
+    from app.modules.fiscal import emision
+    from app.modules.fiscal.models import AlertaFiscal, WorkerLatido
+
+    with sesion() as db:
+        c = emision.contadores(db)
+        latido = db.get(WorkerLatido, "fiscal")
+        abiertas = db.scalar(select(_func.count()).select_from(AlertaFiscal).where(AlertaFiscal.estado == "abierta"))
+    print(f"Proveedor: {get_settings().fiscal_proveedor}")
+    print(f"Pendientes: {c['pendientes']}  Rechazados: {c['rechazados']}  Alertas abiertas: {abiertas}")
+    print(
+        "Worker: " + (f"último latido {latido.ultimo_latido_at:%Y-%m-%d %H:%M:%S %Z}" if latido else "nunca ha corrido")
+    )
+    return 0
+
+
 def construir_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Administración de MundoRepuestos")
     sub = parser.add_subparsers(dest="comando", required=True)
@@ -265,6 +378,19 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("archivo", help="Archivo .xlsx con la hoja 'productos' o 'compatibilidades'")
     p.add_argument("--confirmar", action="store_true", help="Aplica la importación si la validación no tiene errores")
     p.set_defaults(func=importar)
+
+    p = sub.add_parser("fiscal", help="Facturación electrónica: rangos de Factus, verificación y estado")
+    ns = p.add_subparsers(dest="accion", required=True)
+    q = ns.add_parser("rangos", help="Lista los rangos de numeración de Factus (ids para las resoluciones)")
+    q.set_defaults(func=fiscal_rangos)
+    q = ns.add_parser("verificar", help="Prueba la conexión y que las resoluciones activas apunten a rangos válidos")
+    q.set_defaults(func=fiscal_verificar)
+    q = ns.add_parser("vincular", help="Asigna el id de rango de Factus a una resolución local")
+    q.add_argument("resolucion_id", help="id (UUID) de fiscal.resoluciones_numeracion")
+    q.add_argument("rango_id", help="id del rango en Factus (ver `fiscal rangos`)")
+    q.set_defaults(func=fiscal_vincular)
+    q = ns.add_parser("estado", help="Pendientes, rechazados, alertas y latido del worker")
+    q.set_defaults(func=fiscal_estado)
     return parser
 
 

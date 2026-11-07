@@ -214,9 +214,8 @@ def test_diferencia_de_arqueo_nunca_bloquea_en_ninguna_politica(mundo, conn):
     cajero.abrir_turno("50000")
     assert cajero.post("/pos/turnos/actual/cierre", json={"conteo": faltante}).status_code == 200
     assert len(_revisiones(conn, "diferencia_arqueo")) == 1  # libre: no genera revisión
-    # una autorización enviada se ignora (no se consume ni hace falta)
     cajero.abrir_turno("50000")
-    r = cajero.post("/pos/turnos/actual/cierre", json={"conteo": faltante, "autorizacion_id": uid7()})
+    r = cajero.post("/pos/turnos/actual/cierre", json={"conteo": faltante})
     assert r.status_code == 200, r.text
 
 

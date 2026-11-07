@@ -1,6 +1,9 @@
 """Los nombres de constraints e índices (ck_*, uq_*, ix_*, ex_*) que cita docs/base-de-datos/modelo.md deben existir en la
 BD migrada, y a la inversa (nombres de la BD sin documentar) se avisa con una advertencia.
 
+Las secciones cuyo encabezado lleva «diseño Fase N» (tablas de las Fases 2 y 3, aún no implementadas) NO se verifican:
+sus nombres son diseño. Al implementarlas se quita la marca y el test las exige.
+
 La deriva que YA existía al crear esta prueba está congelada en `nombres_documentados_pendientes.txt`: solo puede encogerse.
 """
 
@@ -18,8 +21,28 @@ NOMBRE = re.compile(r"\b(?:ck|uq|ix|ex)_[a-z0-9_]+")
 PREFIJO_BD = re.compile(r"^(?:ck|uq|ix|ex)_")
 
 
+ENCABEZADO = re.compile(r"^(#{2,3}) ")
+
+
+def _texto_verificable() -> str:
+    """modelo.md sin las secciones marcadas «diseño Fase N» (un `##` marcado cubre sus `###`)."""
+    salida: list[str] = []
+    omitir_nivel: int | None = None  # nivel del encabezado marcado que se está omitiendo
+    for linea in MODELO.read_text(encoding="utf-8").splitlines():
+        m = ENCABEZADO.match(linea)
+        if m:
+            nivel = len(m.group(1))
+            if omitir_nivel is not None and nivel <= omitir_nivel:
+                omitir_nivel = None
+            if omitir_nivel is None and "diseño Fase" in linea:
+                omitir_nivel = nivel
+        if omitir_nivel is None:
+            salida.append(linea)
+    return "\n".join(salida)
+
+
 def _documentados() -> set[str]:
-    return {m.rstrip("_") for m in NOMBRE.findall(MODELO.read_text(encoding="utf-8"))}
+    return {m.rstrip("_") for m in NOMBRE.findall(_texto_verificable())}
 
 
 def _pendientes() -> set[str]:

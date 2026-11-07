@@ -65,6 +65,9 @@ uv run python -m app.cli datos-demo [--catalogo]   # empresa, sede Principal + n
 uv run python -m app.cli importaciones limpiar [--dias 7]   # purga importaciones Excel sin confirmar (locales, no se sincronizan)
 uv run python -m app.cli inventario verificar [--reparar]   # existencias vs kardex
 uv run python -m app.cli importar ARCHIVO.xlsx [--confirmar] # importación Excel (sin --confirmar solo valida)
+uv run python -m app.workers.fiscal [--una-vez]   # worker de facturación electrónica (FISCAL_PROVEEDOR=factus|simulado); en Docker: docker compose --profile app up -d worker-fiscal
+uv run python -m app.cli fiscal rangos|verificar|vincular|estado   # rangos de Factus, conexión, id_rango_proveedor, pendientes
+uv run pytest -m factus -s                   # pruebas contra el sandbox real de Factus (se omiten sin credenciales)
 uv run python -m scripts.perf_catalogo       # rendimiento con 50 000 productos (BD aparte mundorepuestos_test_perf; añadir --conservar para inspeccionarla)
 
 # psql interactivo (Windows/PowerShell; las comillas simples evitan que PowerShell expanda $POSTGRES_*)
@@ -131,4 +134,5 @@ Clientes: Taller Automotriz El Pistón S.A.S. (NIT 901234567), Transportes Andin
 - [x] Catálogo e inventario por API (CRUD, precios, imágenes, búsqueda, escáner, kardex con costo promedio, ajustes, entradas, importación Excel, `inventario verificar`).
 - [x] **Migración 0010**: políticas de autorización por acción (libre / revisión posterior / requiere autorización), aprobación remota, revisiones, `vendedor_id`/`cajero_id`, capa `app/aplicacion/` (casos de uso; routers delgados, sin callbacks), `pos.precio_manual` fusionado en `pos.cambiar_precio`, rol `vendedor`, `datos-demo --catalogo`, pruebas de arquitectura y de documentación de constraints.
 - [x] **Migración 0009**: turnos y caja (apertura, movimientos, conteo ciego, arqueo, cierre forzado), ventas POS (idempotentes, pagos mixtos, espera, ticket), devoluciones (NC `pendiente_envio`), `inicializar`, configuración por sede (`organizacion.configuracion`). La FE/NC se crean `pendiente_envio`; sin llamadas a Factus.
-- [ ] Frontends, integración DIAN (Factus: envío de los documentos `pendiente_envio`), agente de sync — NO iniciar hasta aprobación.
+- [x] **Migración 0011 + integración Factus (sandbox)**: worker fiscal, adaptador Factus y simulado, `/fiscal/...`, estado fiscal en ticket/POS/health, alertas, índices en todas las FK, permisos `cajas.turno.*` y `fiscal.gestionar`. Detalle: `docs/integraciones/factus.md`.
+- [ ] Frontends, agente de sync (debe excluir los eventos `fiscal.emitir`), paso a producción de Factus — NO iniciar hasta aprobación.

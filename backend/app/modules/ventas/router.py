@@ -38,7 +38,6 @@ from app.modules.ventas.schemas import (
 class MotivoOut(BaseModel):
     codigo: str
     nombre: str
-    requiere_autorizacion: bool
 
 
 router = APIRouter(prefix="/pos", tags=["ventas"])
@@ -178,6 +177,15 @@ def ticket(venta_id: uuid.UUID, db: Db, actor: Ve, sede_id: Annotated[uuid.UUID 
     return uc.ticket(db, venta_id, _sede(db, actor, sede_id))
 
 
+@router.get(
+    "/ventas/{venta_id}/estado-fiscal",
+    response_model=dict[str, Any],
+    summary="Estado de la factura electrónica de la venta (consulta liviana; el POS la repite hasta `definitivo`)",
+)
+def estado_fiscal(venta_id: uuid.UUID, db: Db, actor: Ve, sede_id: Annotated[uuid.UUID | None, Query()] = None):
+    return uc.estado_fiscal(db, venta_id, _sede(db, actor, sede_id))
+
+
 # ------------------------------------------------------------------------------------------------ devoluciones
 def _devolucion_out(d: DevolucionDetalle, repetida: bool = False) -> DevolucionOut:
     dev = d.devolucion
@@ -223,7 +231,7 @@ def detalle_devolucion(
 @router.get("/motivos-devolucion", response_model=list[MotivoOut], summary="Motivos de devolución")
 def motivos_devolucion(db: Db, actor: Ve):
     return [
-        MotivoOut(codigo=m.codigo, nombre=m.nombre, requiere_autorizacion=m.requiere_autorizacion)
+        MotivoOut(codigo=m.codigo, nombre=m.nombre)
         for m in db.scalars(select(MotivoDevolucion).where(MotivoDevolucion.activo).order_by(MotivoDevolucion.nombre))
     ]
 

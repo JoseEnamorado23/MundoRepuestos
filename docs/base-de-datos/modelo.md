@@ -171,6 +171,9 @@ Detalle de las divisiones: `91 800 / 1,19 = 77 142,857… → 77 142,86`; `11 25
 
 ---
 
+### 1.9 Índices en claves foráneas (regla)
+Toda FK de la Fase 1 lleva un índice cuyas primeras columnas sean las de la FK, con nombre `ix_<tabla>_<columna>` (parcial `WHERE col IS NOT NULL` si la columna admite NULL). La migración 0011 creó los 42 que faltaban; `tests/test_fk_indices.py` lo verifica. **Excepciones documentadas** (no se indexan): `created_by`, `nodo_origen_id` y `nodo_destino_id` (auditoría/origen; nunca se filtra por ellas y los padres no se borran); las FK a `referencia.*` (catálogos DIAN pequeños y estáticos); el schema `auditoria` (bitácora de solo agregar, se consulta por entidad/actor/fecha); y las FK cubiertas por el prefijo de otro índice (p. ej. `sedes.empresa_id` por `uq_sedes_empresa_codigo`).
+
 ## 2. Diagrama general
 
 Solo entidades principales; el detalle está en cada módulo.
@@ -232,7 +235,7 @@ Todas `[R]` salvo que se indique. PK = `codigo`. Se siembran por migración con 
 | `tipos_documento_fiscal` | `codigo text` | `nombre`, `codigo_dian`, `requiere_referencia boolean`, `usa_resolucion boolean`, `activo boolean` | **Activos:** `FE` Factura electrónica · `NC` Nota crédito · `ND` Nota débito. **Reservados (`activo=false`):** `POS_E` Doc. equivalente POS · `NA` Nota de ajuste · `DS` Documento soporte | `fiscal.*` |
 | `conceptos_nota` | PK `(tipo_documento_codigo, codigo)` | `nombre` | NC: 1 Devolución parcial · 2 Anulación · 3 Rebaja/descuento · 4 Ajuste de precio · 5 Otros. ND: 1 Intereses · 2 Gastos por cobrar · 3 Cambio de valor · 4 Otros | notas |
 
-Índices: ninguno adicional (PK cubre toda búsqueda; tablas de < 1.200 filas). Excepción `municipios`: `ix_municipios_departamento (departamento_codigo)` para listas dependientes en formularios, y `ix_municipios_nombre_trgm` GIN `(f_unaccent(lower(nombre)) gin_trgm_ops)` para autocompletar ciudad.
+Índices: ninguno adicional (PK cubre toda búsqueda; tablas de < 1.200 filas). Excepción `municipios`: `ix_municipios_departamento_codigo (departamento_codigo)` para listas dependientes en formularios, y `ix_municipios_nombre_trgm` GIN `(f_unaccent(lower(nombre)) gin_trgm_ops)` para autocompletar ciudad.
 
 **Por qué `codigo` como PK natural y no UUID**: son datos oficiales con identificador estable, idénticos en todos los nodos, y las tablas de negocio los referencian en snapshots (`medio_pago_codigo = '10'`) legibles sin JOIN.
 
@@ -311,7 +314,7 @@ PK `(empresa_id, responsabilidad_codigo)`. FKs: `empresa_id → empresas ON DELE
 | `permite_recoger_pedidos` | boolean | NOT NULL | `true` | Si el e-commerce puede ofrecer "recoger en esta sede". |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_sedes_empresa_codigo (empresa_id, codigo)`. Índice `ix_sedes_empresa (empresa_id)`: listar sedes de la empresa (FK sin índice sería un seq-scan en cada JOIN/borrado de empresa).
+UNIQUE `uq_sedes_empresa_codigo (empresa_id, codigo)`. La FK `empresa_id` queda cubierta por el prefijo de `uq_sedes_empresa_codigo` (no necesita índice propio; excepción documentada en §1.9).
 
 ### 4.4 `organizacion.nodos` — `[M]` · Clase L
 **Propósito**: cada instancia del backend. `nodo_origen_id` de todas las demás tablas apunta aquí. Hay exactamente un nodo `cloud` y un nodo `edge` activo por sede.
@@ -453,13 +456,13 @@ Los permisos son **contratos entre el código y la BD** (el endpoint pregunta po
 | `requiere_autorizacion` | boolean | NOT NULL | `false` | Si el empleado **no** lo tiene, un supervisor puede autorizarlo puntualmente con PIN (`autorizaciones`). |
 
 ### 5.4 `identidad.roles_permisos` — `[L]`
-PK `(rol_id, permiso_codigo)`. `rol_id → roles ON DELETE CASCADE`, `permiso_codigo → permisos ON DELETE RESTRICT`. Índice `ix_roles_permisos_permiso (permiso_codigo)`: "¿qué roles tienen este permiso?" (auditoría de accesos).
+PK `(rol_id, permiso_codigo)`. `rol_id → roles ON DELETE CASCADE`, `permiso_codigo → permisos ON DELETE RESTRICT`. Índice `ix_roles_permisos_permiso_codigo (permiso_codigo)`: "¿qué roles tienen este permiso?" (auditoría de accesos).
 
 ### 5.5 `identidad.empleados_roles` — `[L]`
-PK `(empleado_id, rol_id)`. `empleado_id → empleados RESTRICT`, `rol_id → roles RESTRICT`. Índice `ix_empleados_roles_rol (rol_id)` (reverso). Permisos efectivos = unión de los roles. Los roles son globales; lo que limita dónde opera un empleado es `empleados_sedes`.
+PK `(empleado_id, rol_id)`. `empleado_id → empleados RESTRICT`, `rol_id → roles RESTRICT`. Índice `ix_empleados_roles_rol_id (rol_id)` (reverso). Permisos efectivos = unión de los roles. Los roles son globales; lo que limita dónde opera un empleado es `empleados_sedes`.
 
 ### 5.6 `identidad.empleados_sedes` — `[L]`
-PK `(empleado_id, sede_id)`; `empleado_id → empleados RESTRICT`, `sede_id → organizacion.sedes RESTRICT`. Columna `es_sede_principal boolean NOT NULL DEFAULT false`. Índice `ix_empleados_sedes_sede (sede_id)`: el edge solo replica los empleados de su sede (`WHERE sede_id = :mi_sede`).
+PK `(empleado_id, sede_id)`; `empleado_id → empleados RESTRICT`, `sede_id → organizacion.sedes RESTRICT`. Columna `es_sede_principal boolean NOT NULL DEFAULT false`. Índice `ix_empleados_sedes_sede_id (sede_id)`: el edge solo replica los empleados de su sede (`WHERE sede_id = :mi_sede`).
 
 **PIN del POS por sede (migración 0006).** Para identificar al empleado solo con su PIN, el PIN debe ser **único por sede**; un hash argon2 (salado) no permite buscar ni garantizar unicidad, por eso el PIN vive aquí con dos columnas:
 - `pin_lookup text NULL` = `HMAC-SHA256(PIN_PEPPER, sede_id ‖ ':' ‖ PIN)` en hex. Determinista: permite el `SELECT` directo y el índice `uq_empleados_sedes_pin UNIQUE (sede_id, pin_lookup) WHERE pin_lookup IS NOT NULL` (dos empleados de la sede no pueden tener el mismo PIN; la misma cifra sí puede repetirse en otra sede).
@@ -492,7 +495,7 @@ Riesgo asumido: el espacio de un PIN de 4–8 dígitos es pequeño; con la BD fi
 | `fusionado_en_id` | uuid | NULL | — | → `terceros(id)` RESTRICT. Si dos nodos crearon offline el mismo documento, el perdedor queda apuntando al ganador (§13.5); los documentos que lo referencian siguen válidos. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-CHECKs: `ck_terceros_nombre` (jurídica ⇒ `razon_social` NOT NULL; natural ⇒ `primer_nombre` AND `primer_apellido` NOT NULL, **excepto** consumidor final); `ck_terceros_dv_nit` (`tipo_documento_codigo <> '31' OR dv IS NOT NULL`); `ck_terceros_cf` (`es_consumidor_final = (numero_documento = '222222222222' AND tipo_documento_codigo = '13')`); `ck_terceros_fusion` (`fusionado_en_id IS DISTINCT FROM id`).
+CHECKs: `ck_terceros_nombre` (jurídica ⇒ `razon_social` NOT NULL; natural ⇒ `primer_nombre` AND `primer_apellido` NOT NULL, **excepto** consumidor final); `ck_terceros_dv_nit` (`tipo_documento_codigo <> '31' OR dv IS NOT NULL`); `ck_terceros_consumidor_final` (`es_consumidor_final = (numero_documento = '222222222222' AND tipo_documento_codigo = '13')`); `ck_terceros_fusion` (`fusionado_en_id IS DISTINCT FROM id`).
 **Fila semilla "Consumidor final"**: `numero_documento='222222222222'`, `tipo_documento_codigo='13'`, `nombre_completo='Consumidor final'`, con **UUID fijo y conocido** (único id no generado por la app) para que sea idéntico en todos los nodos y los POS lo usen sin consultar.
 Índices:
 - `uq_terceros_documento (tipo_documento_codigo, numero_documento) WHERE fusionado_en_id IS NULL` — evita duplicados y es la búsqueda "cliente por NIT/cédula" del POS (la más frecuente). Parcial: los fusionados se conservan sin chocar.
@@ -534,7 +537,7 @@ Direcciones de entrega/facturación de un tercero cliente.
 | `es_predeterminada` | boolean | NOT NULL | `false` | |
 | `activo` | boolean | NOT NULL | `true` | |
 
-Índices: `ix_direcciones_tercero (tercero_id)` (listar al hacer checkout); `uq_direcciones_predeterminada (tercero_id, tipo) WHERE es_predeterminada AND activo` (una predeterminada por tipo). Los pedidos **copian** la dirección (snapshot), por eso editar/desactivar una dirección no altera pedidos pasados.
+Índices: `ix_direcciones_tercero_id (tercero_id)` (listar al hacer checkout); `uq_direcciones_predeterminada (tercero_id, tipo) WHERE es_predeterminada AND activo` (una predeterminada por tipo). Los pedidos **copian** la dirección (snapshot), por eso editar/desactivar una dirección no altera pedidos pasados.
 
 ### 5.11 `identidad.autorizaciones` — `[A]` · Clase S
 **Propósito**: registro de que un supervisor aprobó con PIN una acción que el solicitante no podía hacer solo. Lo referencian ventas, cajas e inventario; por eso vive aquí y no en `ventas` (evita dependencia circular).
@@ -678,7 +681,7 @@ erDiagram
 | `orden` | smallint | NOT NULL | `0` | |
 | `activo` | boolean | NOT NULL | `true` | Desactivar una categoría no desactiva sus productos. |
 
-UNIQUE `uq_categorias_slug (slug)`; UNIQUE `uq_categorias_hermanas (COALESCE(parent_id, '0000…'), lower(nombre))`. Índice `ix_categorias_parent (parent_id)`: recorrer el árbol (hijos de un nodo). Árbol pequeño (cientos): CTE recursivo sin ltree ni path materializado; se reevalúa si supera ~10 000 nodos.
+UNIQUE `uq_categorias_slug (slug)`; UNIQUE `uq_categorias_hermanas (COALESCE(parent_id, '0000…'), lower(nombre))`. Índice `ix_categorias_parent_id (parent_id)`: recorrer el árbol (hijos de un nodo). Árbol pequeño (cientos): CTE recursivo sin ltree ni path materializado; se reevalúa si supera ~10 000 nodos.
 
 ### 6.2 `catalogo.marcas` — `[M]`
 Marca del repuesto (Bosch, Brembo, Gonher, Sakura…) **y** fabricantes OEM de vehículo (Chevrolet/GM, Toyota) cuando se usan como fabricante de una referencia OEM.
@@ -735,8 +738,8 @@ CHECK: `ck_productos_web_activo (NOT publicado_web OR activo)`. Los servicios (`
 Índices:
 - `uq_productos_sku (sku)` — identidad de negocio y búsqueda exacta por SKU en el POS.
 - `uq_productos_slug (slug) WHERE slug IS NOT NULL` — URL del producto en la tienda.
-- `ix_productos_categoria (categoria_id) WHERE activo` — navegación por categoría (parcial: solo activos).
-- `ix_productos_marca (marca_id)` — filtro por marca.
+- `ix_productos_categoria_activos (categoria_id) WHERE activo` — navegación por categoría (parcial: solo activos).
+- `ix_productos_marca_id (marca_id)` — filtro por marca.
 - (búsqueda: índices sobre `productos_busqueda`, ver §6.14.)
 - `ix_productos_web (categoria_id, nombre) WHERE publicado_web AND activo` — listado de la tienda sin escanear el catálogo completo.
 - FK `impuesto_id`/`unidad_codigo` sin índice: se consultan solo al cambiar un impuesto (operación rara, tabla de miles).
@@ -754,7 +757,7 @@ ENUM `catalogo.tipo_codigo_barras ('ean13','ean8','upc','code128','interno')`.
 | `es_principal` | boolean | NOT NULL | `false` | El que se imprime en etiquetas. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-Índices: `uq_barras_codigo (codigo) WHERE activo` — **el lector del POS busca por aquí**; único entre los activos para que un escaneo nunca sea ambiguo, y parcial para poder reutilizar un código retirado; `uq_barras_principal (producto_id) WHERE es_principal AND activo`; `ix_barras_producto (producto_id)` (listar códigos del producto).
+Índices: `uq_productos_codigos_barras_codigo (codigo) WHERE activo` — **el lector del POS busca por aquí**; único entre los activos para que un escaneo nunca sea ambiguo, y parcial para poder reutilizar un código retirado; `uq_productos_codigos_barras_principal (producto_id) WHERE es_principal AND activo`; `ix_productos_codigos_barras_producto_id (producto_id)` (listar códigos del producto).
 
 ### 6.6 `catalogo.productos_referencias` — `[M]`
 Números de parte: OEM, original, alterna, equivalente. Se busca por **cualquiera**.
@@ -770,14 +773,14 @@ ENUM `catalogo.tipo_referencia ('oem','original','alterna','equivalente')` (OEM 
 | `notas` | text | NULL | — | |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_referencias (producto_id, tipo, referencia_normalizada, COALESCE(marca_id,'0000…'))`.
-Índices: `ix_referencias_norm (referencia_normalizada text_pattern_ops)` — búsqueda exacta y por prefijo de una referencia tecleada o escaneada; `ix_referencias_trgm` GIN `(referencia_normalizada gin_trgm_ops)` — "contiene" (el cliente solo recuerda parte del número); `ix_referencias_producto (producto_id)` — mostrar todas las referencias de un producto. Una misma referencia puede apuntar a **varios productos** (varias marcas fabrican la equivalente), por eso no es UNIQUE global.
+UNIQUE `uq_productos_referencias (producto_id, tipo, referencia_normalizada, COALESCE(marca_id,'0000…'))`.
+Índices: `ix_productos_referencias_norm (referencia_normalizada text_pattern_ops)` — búsqueda exacta y por prefijo de una referencia tecleada o escaneada; `ix_productos_referencias_trgm` GIN `(referencia_normalizada gin_trgm_ops)` — "contiene" (el cliente solo recuerda parte del número); `ix_productos_referencias_producto_id (producto_id)` — mostrar todas las referencias de un producto. Una misma referencia puede apuntar a **varios productos** (varias marcas fabrican la equivalente), por eso no es UNIQUE global.
 
 ### 6.7 `catalogo.vehiculos_marcas` — `[M]`
 `nombre text NOT NULL`, `slug text NOT NULL`, `codigo_externo text NULL` (id en el catálogo de origen, para reimportar por Excel/CSV sin duplicar — P-10; UNIQUE parcial donde no es NULL), `activo boolean NOT NULL DEFAULT true`. UNIQUE `(lower(nombre))`, `(slug)`.
 
 ### 6.8 `catalogo.vehiculos_modelos` — `[M]`
-`marca_id → vehiculos_marcas RESTRICT`, `nombre` (Spark GT, Aveo), `slug`, `codigo_externo text NULL` (idem, UNIQUE parcial), `activo`. UNIQUE `uq_modelos (marca_id, lower(nombre))` (también sirve la búsqueda "modelos de una marca").
+`marca_id → vehiculos_marcas RESTRICT`, `nombre` (Spark GT, Aveo), `slug`, `codigo_externo text NULL` (idem, UNIQUE parcial), `activo`. UNIQUE `uq_vehiculos_modelos_marca_nombre (marca_id, lower(nombre))` (también sirve la búsqueda "modelos de una marca").
 
 ### 6.9 `catalogo.vehiculos_versiones` — `[M]`
 Una versión = combinación comercial concreta de un modelo (años, motor, cilindraje).
@@ -797,8 +800,8 @@ ENUM `catalogo.combustible ('gasolina','diesel','gas','hibrido','electrico','fle
 | `anios` | int4range | NOT NULL | — | `GENERATED ALWAYS AS (int4range(anio_desde::int, anio_hasta::int, '[]')) STORED`. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-CHECKs: `ck_versiones_anios (anio_hasta IS NULL OR anio_hasta >= anio_desde)`, `anio_desde BETWEEN 1950 AND 2100`.
-Índice `ix_versiones_modelo_anios` GIST `(modelo_id, anios)` (usa `btree_gist`) — responde "versiones del modelo X vigentes en el año 2018" con `anios @> 2018`.
+CHECKs: `ck_vehiculos_versiones_anios_orden (anio_hasta IS NULL OR anio_hasta >= anio_desde)`, `anio_desde BETWEEN 1950 AND 2100`.
+Índice `ix_vehiculos_versiones_modelo_anios` GIST `(modelo_id, anios)` (usa `btree_gist`) — responde "versiones del modelo X vigentes en el año 2018" con `anios @> 2018`.
 
 ### 6.10 `catalogo.productos_compatibilidades` — `[M]`
 Producto ↔ versión de vehículo en que sirve.
@@ -811,10 +814,10 @@ Producto ↔ versión de vehículo en que sirve.
 | `notas` | text | NULL | — | "Solo con ABS". |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_compat (producto_id, version_id)`. Índice `ix_compat_version (version_id, producto_id)` — **el sentido de la búsqueda** ("qué sirve para este vehículo"); el UNIQUE cubre el sentido contrario ("en qué vehículos sirve").
+UNIQUE `uq_productos_compatibilidades_producto_version (producto_id, version_id)`. Índice `ix_productos_compatibilidades_version_producto (version_id, producto_id)` — **el sentido de la búsqueda** ("qué sirve para este vehículo"); el UNIQUE cubre el sentido contrario ("en qué vehículos sirve").
 
 ### 6.11 `catalogo.productos_imagenes` — `[M]`
-`producto_id → productos RESTRICT`, `url text NOT NULL`, `url_miniatura text NULL`, `texto_alternativo text NULL`, `orden smallint NOT NULL DEFAULT 0`, `es_principal boolean NOT NULL DEFAULT false`, `activo boolean NOT NULL DEFAULT true`. Índices: `ix_imagenes_producto (producto_id, orden)`; `uq_imagenes_principal (producto_id) WHERE es_principal AND activo`. Los archivos viven en almacenamiento de objetos; la BD solo guarda la URL.
+`producto_id → productos RESTRICT`, `url text NOT NULL`, `url_miniatura text NULL`, `texto_alternativo text NULL`, `orden smallint NOT NULL DEFAULT 0`, `es_principal boolean NOT NULL DEFAULT false`, `activo boolean NOT NULL DEFAULT true`. Índices: `ix_productos_imagenes_producto_orden (producto_id, orden)`; `uq_productos_imagenes_principal (producto_id) WHERE es_principal AND activo`. Los archivos viven en almacenamiento de objetos; la BD solo guarda la URL.
 
 ### 6.12 `catalogo.listas_precios` — `[M]`
 
@@ -826,7 +829,7 @@ UNIQUE `uq_compat (producto_id, version_id)`. Índice `ix_compat_version (versio
 | `es_predeterminada` | boolean | NOT NULL | `false` | |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_listas_codigo`; `uq_listas_predeterminada ((true)) WHERE es_predeterminada` (una sola).
+UNIQUE `uq_listas_precios_codigo`; `uq_listas_precios_predeterminada ((true)) WHERE es_predeterminada` (una sola).
 
 ### 6.12b `catalogo.terceros_listas_precios` — `[L]`
 Qué lista aplica a un cliente (taller/mayorista). PK `(tercero_id)`; `tercero_id → identidad.terceros RESTRICT`, `lista_precio_id → listas_precios RESTRICT`. Sin lista asignada → la predeterminada. (Vive en `catalogo` y no en `identidad` por la dirección de dependencias.)
@@ -856,7 +859,7 @@ Tres capas, de la más precisa a la más tolerante, ejecutadas en una sola consu
 2. **Full-text** (`productos_busqueda.documento @@ websearch_to_tsquery('spanish', f_unaccent(:q))`), ordenado por `ts_rank`. El `tsvector` pondera: **A** = nombre + marca + referencias (configuración `simple`, porque un número de parte no se debe "stemmear") — además nombre y marca entran también con config `spanish` (peso A), de modo que una consulta `websearch_to_tsquery('spanish', …)` encuentra "freno" aunque el vector `simple` guarde la forma literal (ajuste hallado al probar la implementación, migración 0003), **B** = categoría, **C** = descripción. Config `spanish` con `unaccent`: "pastillas"="pastilla", "frenó"="freno", "ñ" y tildes indiferentes. Lo mantiene un trigger sobre `productos`, `productos_referencias` y `marcas` (recalcula las filas afectadas) — **no** una columna `GENERATED` porque abarca varias tablas.
 3. **Trigram** (`productos_busqueda.texto % :q` / `similarity()`): rescata errores de digitación ("pastias de fren") cuando 1 y 2 devuelven poco.
 
-**Tabla `catalogo.productos_busqueda`** (migración 0005; derivada y local, **no se sincroniza**, clase L): `producto_id uuid` PK/FK → `productos` ON DELETE CASCADE · `documento tsvector NOT NULL` (ponderado: A nombre+marca+referencias, B categoría, C descripción) · `texto text NOT NULL` (`lower(f_unaccent(nombre + marca))`, para trigram) · `actualizado_at timestamptz`. Índices: `ix_productos_busqueda_documento` GIN `(documento)` y `ix_productos_busqueda_texto_trgm` GIN `(texto gin_trgm_ops)`. La mantiene `catalogo.f_busqueda_producto(producto_id)` (upsert) disparada por triggers `tg_busqueda_producto` en `productos` (nombre, descripción, marca, categoría), `productos_referencias` (insert/update/delete), `marcas.nombre` y `categorias.nombre`. **Por qué una tabla aparte:** al estar en `productos`, cada recalculo (p. ej. renombrar una marca) incrementaba `version`/`updated_at` por `tg_tocar` y habría generado eventos de sync y falsos conflictos entre nodos.
+**Tabla `catalogo.productos_busqueda`** (migración 0005; derivada y local, **no se sincroniza**, clase L): `producto_id uuid` PK/FK → `productos` ON DELETE CASCADE · `documento tsvector NOT NULL` (ponderado: A nombre+marca+referencias, B categoría, C descripción) · `texto text NOT NULL` (`lower(f_unaccent(nombre + marca))`, para trigram) · `actualizado_at timestamptz`. Índices: `ix_productos_busqueda_documento` GIN `(documento)` y `ix_productos_busqueda_texto_gist` GIN `(texto gin_trgm_ops)`. La mantiene `catalogo.f_busqueda_producto(producto_id)` (upsert) disparada por triggers `tg_busqueda_producto` en `productos` (nombre, descripción, marca, categoría), `productos_referencias` (insert/update/delete), `marcas.nombre` y `categorias.nombre`. **Por qué una tabla aparte:** al estar en `productos`, cada recalculo (p. ej. renombrar una marca) incrementaba `version`/`updated_at` por `tg_tocar` y habría generado eventos de sync y falsos conflictos entre nodos.
 
 
 La búsqueda por **vehículo** se une por `productos_compatibilidades` (ver flujo (g)). Sinónimos regionales ("balatas" = "pastillas") quedan como pregunta abierta (P-9).
@@ -924,13 +927,13 @@ erDiagram
 | `tipo` | text | NOT NULL | `'general'` | (0009) `'general'` \| `'averias'`. `CHECK ck_bodegas_tipo_valido`. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_bodegas (sede_id, codigo)` (cubre listar bodegas de una sede). (0009) `ck_bodegas_averias_no_vendible` (`tipo <> 'averias' OR NOT es_vendible`) y `uq_bodegas_averias_sede (sede_id) WHERE tipo='averias' AND activo`: una bodega de averías activa por sede, nunca vendible; es el destino de las devoluciones defectuosas (su stock no cuenta como disponible).
+UNIQUE `uq_bodegas_sede_codigo (sede_id, codigo)` (cubre listar bodegas de una sede). (0009) `ck_bodegas_averias_no_vendible` (`tipo <> 'averias' OR NOT es_vendible`) y `uq_bodegas_averias_sede (sede_id) WHERE tipo='averias' AND activo`: una bodega de averías activa por sede, nunca vendible; es el destino de las devoluciones defectuosas (su stock no cuenta como disponible).
 
 ### 7.2 `inventario.ubicaciones` — `[M]`
-`bodega_id → bodegas RESTRICT`, `codigo text NOT NULL` (`A-03-2`), `pasillo text NOT NULL`, `estante text NULL`, `nivel text NULL`, `descripcion text NULL`, `activo boolean NOT NULL DEFAULT true`. UNIQUE `uq_ubicaciones (bodega_id, codigo)`.
+`bodega_id → bodegas RESTRICT`, `codigo text NOT NULL` (`A-03-2`), `pasillo text NOT NULL`, `estante text NULL`, `nivel text NULL`, `descripcion text NULL`, `activo boolean NOT NULL DEFAULT true`. UNIQUE `uq_ubicaciones_bodega_codigo (bodega_id, codigo)`.
 
 ### 7.3 `inventario.productos_ubicaciones` — `[L]`
-Dónde está físicamente el producto (alistar pedidos, conteos). PK `(producto_id, ubicacion_id)`; `producto_id → catalogo.productos RESTRICT`, `ubicacion_id → ubicaciones RESTRICT`; `es_principal boolean NOT NULL DEFAULT false`. Índice `ix_produb_ubicacion (ubicacion_id)` (conteo por ubicación: "qué hay en el estante A-03"). El stock **no** se lleva por ubicación (decisión D-12): solo por bodega.
+Dónde está físicamente el producto (alistar pedidos, conteos). PK `(producto_id, ubicacion_id)`; `producto_id → catalogo.productos RESTRICT`, `ubicacion_id → ubicaciones RESTRICT`; `es_principal boolean NOT NULL DEFAULT false`. Índice `ix_productos_ubicaciones_ubicacion_id (ubicacion_id)` (conteo por ubicación: "qué hay en el estante A-03"). El stock **no** se lleva por ubicación (decisión D-12): solo por bodega.
 
 ### 7.4 `inventario.movimientos_inventario` — `[A]` · **EL KARDEX** · Clase S
 **Propósito**: libro mayor de inventario. Solo `INSERT`. El stock es la suma de sus filas.
@@ -954,12 +957,12 @@ ENUMs:
 | `origen_linea_id` | uuid | NOT NULL | — | Id de la línea del documento (`ventas_items.id`, `recepciones_items.id`…). Clave de idempotencia. |
 | `ocurrido_at` | timestamptz | NOT NULL | — | Instante de negocio (cuando pasó en la tienda); `created_at` es cuando se insertó en **esta** BD (en la nube será posterior). |
 
-CHECKs: `ck_mov_cantidad_signo`: `(tipo IN ('saldo_inicial','entrada_compra','devolucion_venta','ajuste_positivo','traslado_entrada') AND cantidad > 0) OR (tipo IN ('devolucion_proveedor','venta','ajuste_negativo','traslado_salida') AND cantidad < 0)`; `ck_mov_origen_coherente` (tipo `venta` ⇒ `origen_tipo='venta'`, etc.); `costo_unitario >= 0`.
+CHECKs: `ck_movimientos_inventario_cantidad_signo`: `(tipo IN ('saldo_inicial','entrada_compra','devolucion_venta','ajuste_positivo','traslado_entrada') AND cantidad > 0) OR (tipo IN ('devolucion_proveedor','venta','ajuste_negativo','traslado_salida') AND cantidad < 0)`; `ck_movimientos_inventario_origen_coherente` (tipo `venta` ⇒ `origen_tipo='venta'`, etc.); `costo_unitario >= 0`.
 Índices:
-- `uq_mov_secuencia (bodega_id, producto_id, secuencia)` — integridad del orden y cobertura de "último movimiento de un producto".
-- `uq_mov_idempotencia (origen_tipo, origen_linea_id, tipo, bodega_id)` — **idempotencia**: reintentar una venta, o que la nube reciba dos veces el mismo evento, nunca duplica el movimiento (`INSERT … ON CONFLICT DO NOTHING`). `tipo` y `bodega_id` entran porque un traslado produce dos movimientos con la misma línea.
-- `ix_mov_producto_fecha (producto_id, bodega_id, ocurrido_at DESC)` — pantalla de kardex de un producto.
-- `ix_mov_origen (origen_tipo, origen_id)` — "¿qué movimientos generó esta venta/recepción?".
+- `uq_movimientos_inventario_secuencia (bodega_id, producto_id, secuencia)` — integridad del orden y cobertura de "último movimiento de un producto".
+- `uq_movimientos_inventario_idempotencia (origen_tipo, origen_linea_id, tipo, bodega_id)` — **idempotencia**: reintentar una venta, o que la nube reciba dos veces el mismo evento, nunca duplica el movimiento (`INSERT … ON CONFLICT DO NOTHING`). `tipo` y `bodega_id` entran porque un traslado produce dos movimientos con la misma línea.
+- `ix_movimientos_inventario_kardex (producto_id, bodega_id, ocurrido_at DESC)` — pantalla de kardex de un producto.
+- `ix_movimientos_inventario_origen (origen_tipo, origen_id)` — "¿qué movimientos generó esta venta/recepción?".
 - `brin_mov_ocurrido` BRIN `(ocurrido_at)` — reportes por rango de fechas sobre una tabla que solo crece en orden temporal; el BRIN pesa KB, no GB.
 Escala: si supera ~50 M filas se particiona por año de `ocurrido_at` (la PK pasaría a `(id, ocurrido_at)`); no se hace de entrada.
 **Corrección**: nunca se edita. Un error se corrige con un movimiento inverso (`ajuste_*` con motivo y autorización, o `devolucion_venta`).
@@ -984,7 +987,7 @@ Escala: si supera ~50 M filas se particiona por año de `ocurrido_at` (la PK pas
 **Cálculo del costo promedio** (en la misma transacción que el movimiento): en una entrada con cantidad previa `q ≥ 0`: `prom' = (q·prom + e·costo) / (q + e)`; si `q < 0` (se vendió sin stock): `prom' = costo` (se "reinicia" con el costo real, y las ventas negativas ya quedaron con costo estimado). Las salidas no cambian el promedio.
 **Recalculable**: la función `inventario.recalcular_existencias(bodega_id, producto_id)` recorre el kardex por `secuencia` y reescribe la fila; se usa en auditorías, tras restaurar un backup y para verificar (job nocturno compara `existencias` contra `saldo_cantidad` del último movimiento; cualquier diferencia genera alerta).
 **En la nube** las filas de bodegas de una sede se actualizan aplicando los movimientos recibidos (`cantidad = saldo_cantidad` del movimiento de mayor `secuencia`); si llega fuera de orden se retiene hasta completar la secuencia o se recalcula.
-Índices: PK `(bodega_id, producto_id)` (bloqueo `FOR UPDATE` al vender y consulta del POS); `ix_existencias_producto (producto_id)` — stock del producto en todas las bodegas/sedes (e-commerce: "disponible en tienda X"); `ix_existencias_negativas (bodega_id) WHERE cantidad < 0` — revisión de ventas sin stock; `ix_existencias_bajo_minimo` no se crea: el reporte "bajo mínimo" es de baja frecuencia y se resuelve con `alertas_stock`.
+Índices: PK `(bodega_id, producto_id)` (bloqueo `FOR UPDATE` al vender y consulta del POS); `ix_existencias_producto_id (producto_id)` — stock del producto en todas las bodegas/sedes (e-commerce: "disponible en tienda X"); `ix_existencias_negativas (bodega_id) WHERE cantidad < 0` — revisión de ventas sin stock; un índice «bajo mínimo» no se crea: el reporte "bajo mínimo" es de baja frecuencia y se resuelve con `alertas_stock`.
 
 ### 7.6 `inventario.reservas_stock` — `[M]` · Clase C
 **Propósito**: apartar unidades para un pedido web mientras se paga, alista y entrega. Reduce `cantidad_disponible`, no `cantidad`.
@@ -1004,12 +1007,12 @@ ENUM `inventario.estado_reserva ('activa','consumida','liberada','expirada')`. *
 | `movimiento_id` | uuid | NULL | — | → `movimientos_inventario` RESTRICT. Al pasar a `consumida`, el movimiento `venta` que descontó el stock. |
 
 **Máquina de estados**: `activa` → `consumida` (se entregó el pedido; la hace el **edge**) | `liberada` (pedido cancelado o pago vencido) | `expirada` (venció `expira_at`; el job corre en la **nube**, dueña de la reserva). La nube crea la reserva contra su réplica de `existencias` (`cantidad_disponible` menos stock de seguridad) y al sincronizar el edge la aplica sumando a su `cantidad_reservada`; si al aplicarla el stock físico del edge ya no alcanza (se vendió la última pieza en mostrador) se registra `alertas_stock(reserva_sin_stock)` y soporte contacta al cliente. Concurrencia entre `consumida` y `liberada/expirada`: gana la más avanzada, `consumida > expirada > liberada > activa` (lo ya entregado nunca se "libera"). Retención tras `listo_para_recoger`: `pedidos.retencion_dias_recoger` (3 días por defecto).
-Índices: `uq_reservas_linea (origen_tipo, origen_linea_id) WHERE estado = 'activa'` — idempotencia: una línea no reserva dos veces; `ix_reservas_vencimiento (expira_at) WHERE estado = 'activa'` — el job que expira (parcial: solo las vivas); `ix_reservas_producto (bodega_id, producto_id) WHERE estado='activa'` — recomputar `cantidad_reservada`; `ix_reservas_origen (origen_tipo, origen_id)` — reservas de un pedido.
+Índices: `uq_reservas_stock_linea (origen_tipo, origen_linea_id) WHERE estado = 'activa'` — idempotencia: una línea no reserva dos veces; `ix_reservas_stock_vencimiento (expira_at) WHERE estado = 'activa'` — el job que expira (parcial: solo las vivas); `ix_reservas_stock_producto (bodega_id, producto_id) WHERE estado='activa'` — recomputar `cantidad_reservada`; `ix_reservas_stock_origen (origen_tipo, origen_id)` — reservas de un pedido.
 
-### 7.7 `inventario.motivos_ajuste` — `[M]` · Clase N
+### 7.7 `inventario.motivos_ajuste` — `[M]` · Clase N · *diseño Fase 2*
 `codigo text NOT NULL` (`merma`, `robo`, `vencimiento`, `error_conteo`, `consumo_interno`, `correccion_ingreso`), `nombre text NOT NULL`, `direccion text NOT NULL CHECK (direccion IN ('positivo','negativo','ambos'))`, `requiere_autorizacion boolean NOT NULL DEFAULT true`, `activo boolean NOT NULL DEFAULT true`. UNIQUE `(codigo)`. Tabla (no ENUM) porque el negocio añade motivos.
 
-### 7.8 `inventario.ajustes_inventario` — `[A]` · Clase S
+### 7.8 `inventario.ajustes_inventario` — `[A]` · Clase S · *diseño Fase 2*
 Documento de ajuste manual o derivado de un conteo. Genera exactamente un movimiento `ajuste_positivo`/`ajuste_negativo`.
 
 | Columna | Tipo | Null | Default | Notas |
@@ -1023,7 +1026,7 @@ Documento de ajuste manual o derivado de un conteo. Genera exactamente un movimi
 
 Índices: `ix_ajustes_producto (producto_id, created_at DESC)`; `ix_ajustes_bodega (bodega_id, created_at DESC)` (reporte de mermas por sede).
 
-### 7.9 `inventario.conteos_fisicos` — `[M]` · Clase C
+### 7.9 `inventario.conteos_fisicos` — `[M]` · Clase C · *diseño Fase 2*
 ENUM `inventario.estado_conteo ('en_curso','cerrado','cancelado')`, `inventario.tipo_conteo ('total','ciclico')`.
 
 | Columna | Tipo | Null | Default | Notas |
@@ -1039,7 +1042,7 @@ ENUM `inventario.estado_conteo ('en_curso','cerrado','cancelado')`, `inventario.
 
 Índice `ix_conteos_bodega (bodega_id, estado)` (conteos abiertos de la bodega).
 
-### 7.10 `inventario.conteos_fisicos_detalle` — `[M]`
+### 7.10 `inventario.conteos_fisicos_detalle` — `[M]` · *diseño Fase 2*
 | Columna | Tipo | Null | Default | Notas |
 |---|---|---|---|---|
 | `conteo_id` | uuid | NOT NULL | — | → `conteos_fisicos` RESTRICT |
@@ -1052,7 +1055,7 @@ ENUM `inventario.estado_conteo ('en_curso','cerrado','cancelado')`, `inventario.
 
 UNIQUE `uq_conteo_detalle (conteo_id, producto_id, COALESCE(ubicacion_id,'0000…'))`. Al cerrar y aprobar, cada línea con `diferencia <> 0` genera un `ajustes_inventario` ligado por `conteo_detalle_id`.
 
-### 7.11 `inventario.traslados` — `[M]` · Clase C
+### 7.11 `inventario.traslados` — `[M]` · Clase C · *diseño Fase 2*
 ENUM `inventario.estado_traslado ('borrador','en_transito','recibido','recibido_con_diferencias','cancelado')`.
 
 | Columna | Tipo | Null | Default | Notas |
@@ -1067,7 +1070,7 @@ ENUM `inventario.estado_traslado ('borrador','en_transito','recibido','recibido_
 UNIQUE `uq_traslados_numero (numero)`. Índices: `ix_traslados_destino (bodega_destino_id, estado)` (qué viene en camino a mi bodega); `ix_traslados_origen (bodega_origen_id, estado)`.
 **Mecanismo**: al despachar, el nodo de la bodega origen escribe `traslado_salida` (stock sale del origen y queda "en tránsito" = Σ `traslados_items.cantidad_enviada` de traslados `en_transito`). Al recibir, el nodo destino escribe `traslado_entrada` por lo realmente recibido (costo = costo promedio de salida, copiado en el ítem). Diferencias (`enviada ≠ recibida`) quedan en el ítem y generan un ajuste negativo en tránsito. Cada nodo escribe solo en **sus** bodegas, por eso no hay conflicto.
 
-### 7.12 `inventario.traslados_items` — `[M]`
+### 7.12 `inventario.traslados_items` — `[M]` · *diseño Fase 2*
 `traslado_id → traslados RESTRICT`, `producto_id → catalogo.productos RESTRICT`, `cantidad_enviada numeric(14,3) NOT NULL CHECK (>0)`, `cantidad_recibida numeric(14,3) NULL CHECK (>=0)`, `costo_unitario numeric(18,4) NOT NULL` (snapshot del costo promedio de origen). UNIQUE `(traslado_id, producto_id)`. Índice `ix_traslados_items_producto (producto_id)` — para calcular la mercancía en tránsito de un producto.
 
 ### 7.13 `inventario.alertas_stock` — `[M]` · Clase S
@@ -1083,7 +1086,7 @@ ENUM `inventario.tipo_alerta_stock ('stock_negativo','bajo_minimo','reserva_sin_
 | `resuelta_at` | timestamptz | NULL | — | |
 | `resuelta_por_id` | uuid | NULL | — | → `identidad.empleados` RESTRICT. Se resuelve sola (con `NULL`) cuando una entrada devuelve el stock ≥ 0. |
 
-Índices: `uq_alertas_abierta (bodega_id, producto_id, tipo) WHERE estado <> 'resuelta'` — **una** alerta viva por condición (una venta tras otra sin stock no genera 50 alertas); `ix_alertas_estado (estado, created_at DESC) WHERE estado <> 'resuelta'` — bandeja del backoffice.
+Índices: `uq_alertas_stock_abierta (bodega_id, producto_id, tipo) WHERE estado <> 'resuelta'` — **una** alerta viva por condición (una venta tras otra sin stock no genera 50 alertas); `ix_alertas_stock_estado (estado, created_at DESC) WHERE estado <> 'resuelta'` — bandeja del backoffice.
 
 ### 7.14 Política de stock negativo
 
@@ -1161,7 +1164,7 @@ consecutivo) y sin duplicados (el UPDATE serializa). Capacidad: 999 999 999 por 
 
 ---
 
-## 8. Schema `compras`
+## 8. Schema `compras` · *diseño Fase 2*
 
 ```mermaid
 erDiagram
@@ -1344,7 +1347,7 @@ Puesto físico de cobro. **Su resolución de numeración** está en `fiscal.reso
 | `ultimo_numero_interno` | bigint | NOT NULL | `0` | Contador de `ventas.numero_interno` (sin valor fiscal). Se incrementa con la función `cajas.siguiente_numero_interno(caja_id)` (`UPDATE … RETURNING`, lock de fila) en la misma transacción que confirma la venta. |
 | `activo` | boolean | NOT NULL | `true` | |
 
-UNIQUE `uq_cajas (sede_id, codigo)`.
+UNIQUE `uq_cajas_sede_codigo (sede_id, codigo)`.
 
 ### 9.2 `cajas.perifericos` — `[M]`
 ENUMs `cajas.tipo_periferico ('impresora_tiquetes','impresora_etiquetas','cajon_monedero','lector_codigos','datafono','pantalla_cliente')`, `cajas.tipo_conexion ('usb','red','serial','bluetooth','via_impresora')`.
@@ -1358,7 +1361,7 @@ ENUMs `cajas.tipo_periferico ('impresora_tiquetes','impresora_etiquetas','cajon_
 | `parametros` | jsonb | NOT NULL | `'{}'` | IP/puerto, `ancho_mm: 80`, página de códigos ESC/POS, comando de apertura del cajón, lenguaje de etiquetas (ZPL/TSPL). |
 | `activo` | boolean | NOT NULL | `true` | |
 
-Índice `ix_perifericos_caja (caja_id) WHERE activo`. Es config del puesto, no historia: se puede editar.
+Índice `ix_perifericos_caja_activos (caja_id) WHERE activo`. Es config del puesto, no historia: se puede editar.
 
 ### 9.3 `cajas.dispositivos` — `[M]`
 Terminal registrado (tablet/PC con el POS). Se **empareja** una vez con un código; desde ahí se autentica con un token largo.
@@ -1377,7 +1380,7 @@ ENUMs `cajas.tipo_dispositivo ('pos','bodega')`, `cajas.estado_dispositivo ('pen
 | `version_cliente` | text | NULL | — | Versión de la PWA/Tauri. |
 | `revocado_at` | timestamptz | NULL | — | |
 
-UNIQUE `uq_dispositivos_token (token_hash)` — **es el índice de autenticación en cada request**. `uq_dispositivos_caja_activo (caja_id) WHERE estado='activo' AND tipo='pos'` — una terminal activa por caja (reemplazar un equipo = revocar el anterior). `ix_dispositivos_sede (sede_id, estado)` — panel de dispositivos.
+UNIQUE `uq_dispositivos_token_hash (token_hash)` — **es el índice de autenticación en cada request**. `uq_dispositivos_caja_activo (caja_id) WHERE estado='activo' AND tipo='pos'` — una terminal activa por caja (reemplazar un equipo = revocar el anterior). `ix_dispositivos_sede (sede_id, estado)` — panel de dispositivos.
 
 ### 9.4 `cajas.turnos` — `[M]` con congelamiento al cerrar
 **Propósito**: periodo de responsabilidad de un cajero sobre una caja. Toda venta POS pertenece a un turno abierto.
@@ -1403,13 +1406,13 @@ ENUM `cajas.estado_turno ('abierto','cerrado')`.
 | `cierre_forzado` | boolean | NOT NULL | `false` | (0009) Cierre por un supervisor de un turno abandonado (`cajas.cierre_forzado`). |
 | `motivo_cierre_forzado` | text | NULL | — | (0009) Obligatorio si `cierre_forzado`: `ck_turnos_forzado_con_motivo`. |
 
-CHECKs: `ck_turnos_cierre_completo` (`estado='abierto' OR (cerrado_at, cerrado_por_id, efectivo_esperado, efectivo_contado) todos NOT NULL`); `ck_turnos_forzado_con_motivo`; `supervisor_cierre_id <> cerrado_por_id`. **0010 elimina `ck_turnos_diferencia_autorizada`** (creado en 0009): la diferencia de arqueo ya NUNCA bloquea el cierre; según `autorizacion.diferencia_arqueo` queda libre o en `auditoria.revisiones` (§14.2). `supervisor_cierre_id`/`autorizacion_cierre_id` solo se llenan hoy en el cierre forzado (supervisor) o quedan NULL. *Corrección documental*: el CHECK `ck_turnos_diferencia_supervisor` que describía una versión anterior de este documento nunca se creó.
+CHECKs: `ck_turnos_cierre_completo` (`estado='abierto' OR (cerrado_at, cerrado_por_id, efectivo_esperado, efectivo_contado) todos NOT NULL`); `ck_turnos_forzado_con_motivo`; `supervisor_cierre_id <> cerrado_por_id`. **0010 elimina el CHECK de diferencia autorizada** (creado en 0009): la diferencia de arqueo ya NUNCA bloquea el cierre; según `autorizacion.diferencia_arqueo` queda libre o en `auditoria.revisiones` (§14.2). `supervisor_cierre_id`/`autorizacion_cierre_id` solo se llenan hoy en el cierre forzado (supervisor) o quedan NULL. *Corrección documental*: un CHECK de diferencia con supervisor que describía una versión anterior de este documento nunca se creó.
 Fórmula: `efectivo_esperado = base_efectivo + Σ ventas_pagos(efectivo).valor + Σ movimientos_caja(ingreso) − Σ movimientos_caja(retiro) − Σ devoluciones_pagos(efectivo).valor` (los pagos en efectivo se guardan **netos de cambio**).
 Índices: `uq_turnos_abierto_por_caja (caja_id) WHERE estado='abierto'` — **un solo turno abierto por caja** (la BD lo garantiza aunque dos clientes intenten abrir a la vez); `uq_turnos_abierto_por_cajero (abierto_por_id) WHERE estado='abierto'` — un cajero no tiene dos cajas abiertas; `ix_turnos_caja_fecha (caja_id, abierto_at DESC)` — historial y cierre Z.
 Cerrado ⇒ inmutable (trigger). Un error de cierre se corrige con una nota en `auditoria`/ajuste contable, no reabriendo el turno.
 
 ### 9.5 `cajas.motivos_movimiento_caja` — `[M]` · Clase N
-`codigo text NOT NULL` (`retiro_seguridad`, `pago_proveedor`, `gasto_menor`, `reposicion_cambio`, `otro`), `nombre`, `tipo text NOT NULL CHECK (tipo IN ('ingreso','retiro','ambos'))`, `requiere_autorizacion boolean NOT NULL DEFAULT false`, `activo`. UNIQUE `(codigo)`.
+`codigo text NOT NULL` (`retiro_seguridad`, `pago_proveedor`, `gasto_menor`, `reposicion_cambio`, `otro`), `nombre`, `tipo text NOT NULL CHECK (tipo IN ('ingreso','retiro','ambos'))`, `activo`. UNIQUE `(codigo)`. *(0011 elimina `requiere_autorizacion`: la regla de autorización vive en las políticas por sede, §4.5.)*
 
 ### 9.6 `cajas.movimientos_caja` — `[A]`
 Entradas y salidas de efectivo **que no son ventas** (retiro de seguridad, pago de flete, reposición de sencillo).
@@ -1424,7 +1427,7 @@ ENUM `cajas.tipo_movimiento_caja ('ingreso','retiro')`.
 | `descripcion` | text | NULL | — | Obligatoria si el motivo es `otro`. |
 | `autorizacion_id` | uuid | NULL | — | → `identidad.autorizaciones` RESTRICT. Obligatoria si el motivo lo exige o `valor` supera el umbral (`pos.retirar_efectivo`). |
 
-Índice `ix_movcaja_turno (turno_id, created_at)` — suma para el cierre y listado del turno. Un movimiento erróneo se anula con otro de signo contrario (inmutable).
+Índice `ix_movimientos_caja_turno (turno_id, created_at)` — suma para el cierre y listado del turno. Un movimiento erróneo se anula con otro de signo contrario (inmutable).
 
 ### 9.7 `cajas.arqueos_turno` — `[A]`
 Conciliación por medio de pago al cerrar: esperado (sistema) vs contado (cajero: billetes, vouchers del datáfono, comprobantes QR/transferencia).
@@ -1438,7 +1441,7 @@ Conciliación por medio de pago al cerrar: esperado (sistema) vs contado (cajero
 | `diferencia` | numeric(18,2) | NOT NULL | — | `GENERATED … (valor_contado - valor_esperado) STORED` |
 | `observacion` | text | NULL | — | |
 
-UNIQUE `uq_arqueos (turno_id, medio_pago_codigo)` (cubre la lectura por turno). Se inserta una fila por cada medio con movimiento en el turno **y siempre** la de efectivo; `turnos.efectivo_esperado/contado` repiten la fila de efectivo para poder consultar y restringir el cierre sin JOIN (denormalización deliberada, consistente porque ambos se escriben en la misma transacción de cierre).
+UNIQUE `uq_arqueos_turno_turno_medio (turno_id, medio_pago_codigo)` (cubre la lectura por turno). Se inserta una fila por cada medio con movimiento en el turno **y siempre** la de efectivo; `turnos.efectivo_esperado/contado` repiten la fila de efectivo para poder consultar y restringir el cierre sin JOIN (denormalización deliberada, consistente porque ambos se escriben en la misma transacción de cierre).
 
 ---
 
@@ -1534,7 +1537,7 @@ Constraint trigger `ctg_ventas_pagos_cuadran` (`DEFERRABLE INITIALLY DEFERRED`):
 - `uq_ventas_numero_interno (caja_id, numero_interno) WHERE numero_interno IS NOT NULL` — integridad y búsqueda "venta N° 1234 de la caja 1" (reimprimir tiquete).
 - `ix_ventas_turno (turno_id) WHERE turno_id IS NOT NULL` — sumas del cierre de turno.
 - `ix_ventas_sede_fecha (sede_id, confirmada_at DESC) WHERE estado='confirmada'` — reportes de ventas por sede y día.
-- `ix_ventas_tercero (tercero_id, confirmada_at DESC)` — historial del cliente.
+- `ix_ventas_tercero_fecha (tercero_id, confirmada_at DESC)` — historial del cliente.
 - `ix_ventas_borradores (caja_id) WHERE estado='borrador'` — recuperar ventas en espera (parcial: pocas filas).
 - `ix_ventas_vendedor (vendedor_id, confirmada_at DESC) WHERE vendedor_id IS NOT NULL` — comisiones.
 - `ix_ventas_cajero (cajero_id, confirmada_at DESC) WHERE cajero_id IS NOT NULL` (0010) — ventas por cajero.
@@ -1570,8 +1573,8 @@ Todo lo histórico es **snapshot**: nada se relee de `productos`, `precios` ni `
 | `costo_estimado` | boolean | NOT NULL | `false` | Espejo del movimiento (§7.4). |
 | `autorizacion_id` | uuid | NULL | — | → `identidad.autorizaciones` RESTRICT. Obligatoria si `descuento_pct` > umbral o `precio_unitario <> precio_lista` por debajo del permitido. |
 
-CHECKs: `ck_items_total (total_linea = bruto_linea - descuento_valor)`, `ck_items_bruto (bruto_linea = round(cantidad * precio_unitario, 2))`.
-UNIQUE `uq_ventas_items_linea (venta_id, linea)` (cubre la lectura por venta). Índice `ix_ventas_items_producto (producto_id, venta_id)` — "ventas de este producto" (rotación, última venta, trazabilidad de una pieza devuelta).
+CHECKs: `ck_ventas_items_total_linea (total_linea = bruto_linea - descuento_valor)`, `ck_ventas_items_bruto_linea (bruto_linea = round(cantidad * precio_unitario, 2))`.
+UNIQUE `uq_ventas_items_venta_linea (venta_id, linea)` (cubre la lectura por venta). Índice `ix_ventas_items_producto (producto_id, venta_id)` — "ventas de este producto" (rotación, última venta, trazabilidad de una pieza devuelta).
 
 ### 10.3 `ventas.ventas_pagos` — `[M]`, congelada con su venta
 Una venta admite **pagos mixtos**.
@@ -1590,10 +1593,10 @@ ENUM `ventas.canal_pago ('manual','datafono','qr','pasarela')`.
 | `ultimos_digitos` | text | NULL | — | `CHECK (~ '^[0-9]{4}$')`. **Nunca** el PAN completo (PCI). |
 | `franquicia` | text | NULL | — | Visa/Mastercard/… |
 
-Índices: `ix_ventas_pagos_venta (venta_id)`; `ix_ventas_pagos_medio (medio_pago_codigo, created_at)` — arqueo por medio y reportes de conciliación con el datáfono. Solo se registran pagos **aprobados**; los intentos rechazados no son parte de la venta (P-7).
+Índices: `ix_ventas_pagos_venta_id (venta_id)`; `ix_ventas_pagos_medio_fecha (medio_pago_codigo, created_at)` — arqueo por medio y reportes de conciliación con el datáfono. Solo se registran pagos **aprobados**; los intentos rechazados no son parte de la venta (P-7).
 
 ### 10.4 `ventas.motivos_devolucion` — `[M]` · Clase N
-`codigo` (`pieza_equivocada`, `defectuosa`, `no_compatible`, `cliente_desiste`, `garantia`, `cambio_de_documento`), `nombre`, `reintegra_stock_por_defecto boolean NOT NULL`, `requiere_autorizacion boolean NOT NULL DEFAULT true`, `activo`. UNIQUE `(codigo)`.
+`codigo` (`pieza_equivocada`, `defectuosa`, `no_compatible`, `cliente_desiste`, `garantia`, `cambio_de_documento`), `nombre`, `reintegra_stock_por_defecto boolean NOT NULL`, `activo`. UNIQUE `(codigo)`. *(0011 elimina `requiere_autorizacion`: la regla vive en la política `autorizacion.devolucion`, §4.5.)*
 
 ### 10.5 `ventas.devoluciones` — `[M]`, congelada al confirmar
 **Propósito**: documento comercial que corrige una venta (total o parcial). Es lo que origina la nota crédito / nota de ajuste.
@@ -1612,7 +1615,7 @@ ENUMs `ventas.estado_devolucion ('borrador','confirmada')`, `ventas.tipo_resoluc
 | `observaciones` | text | NULL | — | |
 | `confirmada_at` | timestamptz | NULL | — | |
 
-Índices: `ix_devoluciones_venta (venta_id)` — devoluciones previas de una venta (tope de lo devolvible); `ix_devoluciones_turno (turno_id) WHERE turno_id IS NOT NULL` — cierre de turno; `ix_devoluciones_fecha (sede_id, confirmada_at DESC) WHERE estado='confirmada'`.
+Índices: `ix_devoluciones_venta_id (venta_id)` — devoluciones previas de una venta (tope de lo devolvible); `ix_devoluciones_turno (turno_id) WHERE turno_id IS NOT NULL` — cierre de turno; `ix_devoluciones_sede_fecha (sede_id, confirmada_at DESC) WHERE estado='confirmada'`.
 
 ### 10.6 `ventas.devoluciones_items` — `[M]`, congelada
 | Columna | Tipo | Null | Default | Notas |
@@ -1627,13 +1630,13 @@ ENUMs `ventas.estado_devolucion ('borrador','confirmada')`, `ventas.tipo_resoluc
 | `reintegra_stock` | boolean | NOT NULL | — | `true` = la pieza regresa físicamente y genera un movimiento `devolucion_venta` en `bodega_reintegro_id`; `false` = no regresa nada (cambio de documento fiscal, ajuste de precio): **no hay movimiento de kardex**. |
 | `bodega_reintegro_id` | uuid | NULL | — | → `inventario.bodegas` RESTRICT. Obligatoria si `reintegra_stock` (puede ser una bodega no vendible de merma/revisión si la pieza vino defectuosa). `CHECK (reintegra_stock = (bodega_reintegro_id IS NOT NULL))`. |
 
-UNIQUE `(devolucion_id, venta_item_id)`. Índice `ix_devitems_venta_item (venta_item_id)` — suma de lo ya devuelto de una línea (la consulta crítica de la validación).
+UNIQUE `(devolucion_id, venta_item_id)`. Índice `ix_devoluciones_items_venta_item (venta_item_id)` — suma de lo ya devuelto de una línea (la consulta crítica de la validación).
 
 ### 10.7 `ventas.devoluciones_pagos` — `[M]`, congelada
-`devolucion_id → devoluciones RESTRICT`, `medio_pago_codigo → referencia.medios_pago RESTRICT`, `valor numeric(18,2) CHECK (>0)`, `referencia text NULL`. Índice `ix_devpagos_devolucion (devolucion_id)`. Un reembolso en efectivo entra en la fórmula de `efectivo_esperado` del turno. (Vale/crédito a favor: P-8.)
+`devolucion_id → devoluciones RESTRICT`, `medio_pago_codigo → referencia.medios_pago RESTRICT`, `valor numeric(18,2) CHECK (>0)`, `referencia text NULL`. Índice `ix_devoluciones_pagos_devolucion_id (devolucion_id)`. Un reembolso en efectivo entra en la fórmula de `efectivo_esperado` del turno. (Vale/crédito a favor: P-8.)
 
 ---
-## 11. Schema `pedidos`  (e-commerce; nace en la nube)
+## 11. Schema `pedidos`  (e-commerce; nace en la nube) · *diseño Fase 3*
 
 ```mermaid
 erDiagram
@@ -1846,7 +1849,7 @@ ENUM `fiscal.ambiente_dian ('habilitacion','produccion')`.
 | `parametros` | jsonb | NOT NULL | `'{}'` | |
 | `activo` | boolean | NOT NULL | `true` | |
 
-Índice `uq_confprov_activo (empresa_id) WHERE activo` (un proveedor activo por empresa).
+Índice `uq_configuracion_proveedor_activo (empresa_id) WHERE activo` (un proveedor activo por empresa).
 
 ### 12.2 `fiscal.resoluciones_numeracion` — `[M]` · Clase S (por columna, ver §13.5)
 **Propósito**: rango de numeración autorizado por la DIAN (resolución + prefijo + desde/hasta + vigencia). Dos modos (ENUM `fiscal.modo_numeracion ('proveedor','local')`):
@@ -1876,7 +1879,7 @@ ENUM `fiscal.estado_resolucion ('borrador','activa','agotada','vencida','anulada
 | `clave_tecnica_ref` | text | NULL | — | **Referencia** (nombre del secreto), no la clave. Con proveedor por API la custodia el proveedor. |
 | `estado` | estado_resolucion | NOT NULL | `'borrador'` | |
 
-CHECK `ck_resoluciones_alcance (caja_id IS NULL OR sede_id IS NOT NULL)`.
+CHECK `ck_resoluciones_numeracion_alcance (caja_id IS NULL OR sede_id IS NOT NULL)`.
 Índices/restricciones:
 - `uq_resoluciones_activa_caja (caja_id, tipo_documento_codigo) WHERE estado='activa' AND caja_id IS NOT NULL` — una resolución viva por caja y tipo.
 - `uq_resoluciones_activa_sede (sede_id, tipo_documento_codigo) WHERE estado='activa' AND caja_id IS NULL AND sede_id IS NOT NULL` y `uq_resoluciones_activa_empresa (empresa_id, tipo_documento_codigo) WHERE estado='activa' AND sede_id IS NULL` — idem para sede y para empresa/nube. Con ellas, el worker de envío resuelve la resolución a usar por (caja → sede → empresa).
@@ -2019,6 +2022,12 @@ COMMIT;
 
 ---
 
+### 12.10 `fiscal.alertas_fiscales` — `[M]` · Clase S (0011)
+Alertas de backoffice del worker fiscal. `documento_id` FK, `sede_id` FK, `tipo` (`rechazado`, `reintentos_agotados`, `configuracion`, `totales_descuadrados`, `nota_sin_factura`), `mensaje`, `detalle jsonb`, `estado` (`abierta`/`resuelta`), `resuelta_at`, `resuelta_por_id`, `comentario`, plantilla `[M]`. CHECKs `ck_alertas_fiscales_tipo`, `ck_alertas_fiscales_estado`, `ck_alertas_fiscales_resuelta_coherente`. Índices: `uq_alertas_fiscales_abierta (documento_id, tipo) WHERE estado='abierta'` (una abierta por tipo), `ix_alertas_fiscales_documento`, `ix_alertas_fiscales_sede_estado (sede_id, estado, created_at DESC)`, `ix_alertas_fiscales_resuelta_por_id`.
+
+### 12.11 `fiscal.worker_latidos` — **local del nodo, NO se sincroniza** (0011)
+`nombre` PK (`fiscal`), `ultimo_latido_at`, `ultimo_ciclo_at`, `ciclos`, `procesados`, `ultimo_error`, `version_app`. El worker la actualiza en cada ciclo; `GET /health` la compara con `FISCAL_WORKER_LATIDO_MAX_SEG`. Detalle de la integración: `docs/integraciones/factus.md`.
+
 ## 13. Schema `sync`  (Clase L: nunca se replica)
 
 ```mermaid
@@ -2096,7 +2105,7 @@ ENUM `sync.estado_outbox ('pendiente','enviado','confirmado','fallido')`.
 | `created_at` | timestamptz | NOT NULL | `now()` | |
 | `enviado_at`, `confirmado_at` | timestamptz | NULL | — | |
 
-Índices: `uq_outbox_idempotency (idempotency_key)`; `ix_outbox_cola (proximo_intento_at, secuencia) WHERE estado IN ('pendiente','fallido')` — lo único que el agente consulta continuamente (parcial: la cola viva es pequeña aunque la tabla tenga millones); `ix_outbox_agregado (agregado_tipo, agregado_id, version_agregado)` — diagnóstico y reconstrucción. Purga: `confirmado` con más de 30 días → archivo/borrado (única tabla donde el borrado es política).
+Índices: `uq_outbox_eventos_idempotency_key (idempotency_key)`; `ix_outbox_eventos_cola (proximo_intento_at, secuencia) WHERE estado IN ('pendiente','fallido')` — lo único que el agente consulta continuamente (parcial: la cola viva es pequeña aunque la tabla tenga millones); `ix_outbox_eventos_agregado (agregado_tipo, agregado_id, version_agregado)` — diagnóstico y reconstrucción. Purga: `confirmado` con más de 30 días → archivo/borrado (única tabla donde el borrado es política).
 
 ### 13.2 `sync.inbox_eventos` — `[L]`
 Registro de lo recibido; **garantiza que un evento no se aplica dos veces**.
@@ -2118,7 +2127,7 @@ ENUM `sync.estado_inbox ('recibido','aplicado','en_espera','conflicto','error')`
 | `aplicado_at` | timestamptz | NULL | — | |
 
 Aplicación: `BEGIN; INSERT INTO inbox … ON CONFLICT DO NOTHING; -- 0 filas ⇒ duplicado: responder ack y terminar; … aplicar al negocio …; UPDATE inbox SET estado='aplicado'; COMMIT;` — insertar el inbox y aplicar el cambio en **una sola transacción**: o ambos o ninguno.
-Índices: PK `(nodo_origen_id, evento_id)` (dedupe); `uq_inbox_idempotency (idempotency_key)`; `ix_inbox_pendientes (recibido_at) WHERE estado IN ('recibido','en_espera','error')`; `ix_inbox_agregado (agregado_tipo, agregado_id, version_agregado)` (ordenar y detectar huecos por agregado).
+Índices: PK `(nodo_origen_id, evento_id)` (dedupe); `uq_inbox_eventos_idempotency_key (idempotency_key)`; `ix_inbox_eventos_pendientes (recibido_at) WHERE estado IN ('recibido','en_espera','error')`; `ix_inbox_eventos_agregado (agregado_tipo, agregado_id, version_agregado)` (ordenar y detectar huecos por agregado).
 
 ### 13.3 `sync.cursores_sync` — `[L]`
 Hasta dónde llegó la sincronización con cada contraparte, por flujo.
@@ -2129,7 +2138,7 @@ PK `(nodo_remoto_id, flujo, direccion)`. Columnas: `nodo_remoto_id uuid → orga
 Todo conflicto que la política automática resolvió "con rastro" o que requiere decisión humana.
 ENUMs `sync.tipo_conflicto ('edicion_concurrente','clave_natural_duplicada','estado_incompatible','dependencia_faltante','violacion_restriccion')`, `sync.resolucion_conflicto ('pendiente','gano_nube','gano_edge','fusionado','manual','descartado')`.
 Columnas: `nodo_origen_id`, `evento_id` (referencia lógica al inbox), `agregado_tipo`, `agregado_id`, `tipo tipo_conflicto NOT NULL`, `version_local integer NULL`, `version_remota integer NULL`, `datos_locales jsonb NOT NULL`, `datos_remotos jsonb NOT NULL`, `resolucion resolucion_conflicto NOT NULL DEFAULT 'pendiente'`, `resuelto_por_id uuid NULL → identidad.empleados RESTRICT`, `resuelto_at timestamptz NULL`, `notas text NULL`.
-Índices: `ix_conflictos_pendientes (created_at) WHERE resolucion = 'pendiente'` — bandeja de soporte; `ix_conflictos_agregado (agregado_tipo, agregado_id)`.
+Índices: `ix_conflictos_sync_pendientes (created_at) WHERE resolucion = 'pendiente'` — bandeja de soporte; `ix_conflictos_sync_agregado (agregado_tipo, agregado_id)`.
 
 ### 13.5 Política de conflictos por tabla
 
@@ -2150,7 +2159,7 @@ Regla general: **toda fila tiene un solo dueño de escritura** (§1.5); la mayor
 | `catalogo.*` (productos, categorías, marcas, códigos, referencias, vehículos, compatibilidades, imágenes, impuestos, listas, precios) | **Edge** (backoffice sobre el edge) | Nube | nube → edge | **Nube, siempre.** El POS no crea ni edita catálogo en v1 (P-4). El edge aplica en orden de cursor; las ventas ya hechas están protegidas por snapshot. Columnas derivadas (`busqueda`, `nombre_busqueda`) **no viajan**: cada nodo las recalcula. |
 | `inventario.bodegas` | **Edge** | Nube (definición) | nube → edge | Nube. |
 | `inventario.ubicaciones`, `productos_ubicaciones` | **Edge** | Sede | edge → nube | **Edge**: quien camina la bodega sabe dónde está la pieza. |
-| `inventario.movimientos_inventario` | **Edge** | Sede (dueña de **sus** bodegas) | edge → nube | **Sin conflicto**: solo agregar, `id` único, idempotente por `uq_mov_idempotencia`. La nube **no** genera movimientos en bodegas de una sede: pide al edge (p. ej. reservas). |
+| `inventario.movimientos_inventario` | **Edge** | Sede (dueña de **sus** bodegas) | edge → nube | **Sin conflicto**: solo agregar, `id` único, idempotente por `uq_movimientos_inventario_idempotencia`. La nube **no** genera movimientos en bodegas de una sede: pide al edge (p. ej. reservas). |
 | `inventario.existencias` | Derivada (local) | Derivada | no se replica como estado | La nube la **recalcula** aplicando los movimientos recibidos (máx. `secuencia` por producto/bodega). Si difiere de lo que informa el edge, **gana el kardex del edge**. |
 | `inventario.reservas_stock` | No existen (sin pedidos web) | Nube (crea/expira/libera) y edge (consume) (**C**) | ambos | La nube crea la reserva `activa` contra su réplica (stock publicado − stock de seguridad) y la expira; el edge la aplica al sincronizar y la marca `consumida` al entregar. Concurrencia: precedencia `consumida > expirada > liberada > activa`. Lo ya entregado nunca se "libera". |
 | `inventario.conteos_fisicos*`, `ajustes_inventario`, `alertas_stock` | **Edge** | Sede | edge → nube | Edge. Excepción alertas: la nube puede marcar `reconocida` (evento al edge); `resuelta` (edge) prevalece. |
@@ -2286,7 +2295,7 @@ ENUMs `auditoria.actor_tipo ('empleado','cliente','sistema','dispositivo')`, `au
 
 ---
 
-## 14A. Schema `cartera`  (diseño mínimo — **Fase 3**, no se implementa ahora)
+## 14A. Schema `cartera`  (diseño mínimo — **Fase 3**, no se implementa ahora) · *diseño Fase 3*
 
 **Propósito**: ventas a crédito (talleres, flotas): cupo y plazo por cliente, cuentas por cobrar, abonos (recibos de caja) y su aplicación. Depende de `identidad`, `cajas` y `ventas`; va después de `ventas` en la cadena de dependencias.
 
@@ -2410,7 +2419,7 @@ Cada decisión con la alternativa descartada y por qué.
 | D-1 | **PK `uuid` UUIDv7 generado por la app**, sin default en BD. | `bigserial`; UUIDv4 (`gen_random_uuid()`); UUID con default en BD. | Con dos clases de nodo que insertan offline, un contador autoincremental colisiona al sincronizar. UUIDv4 resuelve la colisión pero es aleatorio: fragmenta los índices B-tree y degrada las inserciones masivas. UUIDv7 es único globalmente y ordenado por tiempo (localidad de índice, orden cronológico gratis). PG16 no trae `uuidv7()`; generarlo en la app además permite conocer el `id` antes del `INSERT` (outbox, idempotencia). |
 | D-2 | **Un schema de PostgreSQL por módulo** + `referencia`. | Todo en `public` con prefijos; una BD por módulo. | Los schemas hacen visible y verificable (por permisos y por lint de FKs) la frontera del monolito modular y facilitan extraer un módulo después. Una BD por módulo rompería las FKs y las transacciones atómicas que necesita el POS (venta + kardex + documento fiscal + outbox). `referencia` evita dependencias circulares entre módulos. |
 | D-3 | **ENUM nativo para máquinas de estado cerradas; tabla de referencia para códigos DIAN y listas editables por el negocio.** | Todo ENUM; todo tabla; `text + CHECK`. | Ver §1.4. ENUM = compacto y validado, pero `ADD VALUE` es irreversible y requiere esquemas alineados entre nodos (se mitiga con el handshake de `version_esquema`). Las tablas permiten atributos (código DIAN) y alta sin despliegue. `text + CHECK` obliga a reescribir el CHECK en cada cambio y no documenta. |
-| D-4 | **Kardex append-only con cantidad con signo + `existencias` como proyección recalculable.** | Guardar solo el stock y modificarlo; guardar solo el kardex y sumar siempre. | Solo-stock pierde la historia y no es idempotente al sincronizar (¿aplicaste ya este −3?). Solo-kardex hace la lectura del POS O(n). Con ambos: auditable, idempotente (`uq_mov_idempotencia`), verificable (job compara) y lectura O(1). |
+| D-4 | **Kardex append-only con cantidad con signo + `existencias` como proyección recalculable.** | Guardar solo el stock y modificarlo; guardar solo el kardex y sumar siempre. | Solo-stock pierde la historia y no es idempotente al sincronizar (¿aplicaste ya este −3?). Solo-kardex hace la lectura del POS O(n). Con ambos: auditable, idempotente (`uq_movimientos_inventario_idempotencia`), verificable (job compara) y lectura O(1). |
 | D-5 | **Costo promedio móvil ponderado**, por bodega. | FIFO/PEPS por lotes; costo estándar; último costo. | Es el método habitual del comercio de repuestos, aceptado fiscalmente y no exige trazabilidad por lote. FIFO exigiría capas de costo y complica ventas sin stock (stock negativo). Se deja P-15 por si baterías/llantas necesitan lote/serial. |
 | D-6 | **Snapshots** de precio, % IVA, costo, descuento, descripción y datos del adquirente en líneas y documentos. | Referenciar maestros y recalcular. | Un cambio de precio, de tarifa o de razón social de un cliente reescribiría la historia y descuadraría contra lo ya reportado a la DIAN. Costo: algo de duplicación; beneficio: documentos autosuficientes (el XML se regenera sin tocar maestros). |
 | D-7 | **Ventas/devoluciones congeladas por trigger al confirmar**; corrección por documentos nuevos; **`borrador` persistido en BD**. | Permitir `UPDATE` con auditoría; mantener borradores solo en el cliente. | La inmutabilidad se garantiza en el motor, no en la disciplina de la app. Los borradores en BD sobreviven a un apagón del POS y se ven desde otro terminal; su costo (filas que se descartan) es trivial. |
@@ -2460,6 +2469,8 @@ Cada decisión con la alternativa descartada y por qué.
 | D-51 | **Propietario autoaprobable solo si la sede lo permite** (por defecto no), con `autoaprobado = true` auditado. Umbral configurable por sede. | Autoaprobación libre; umbral global | Una tienda de un solo dueño necesita poder operar, pero debe ser una decisión explícita y trazable. |
 | D-52 | **Etapa 1: el edge es dueño de los maestros;** la nube los recibe por *promoción* (§13.6). `datos-demo` crea los maestros con origen en el edge. | Fingir una nube desde el día 1 | En la etapa 1 no hay nube; el dueño de escritura debe ser quien realmente escribe, y la columna `nodo_origen_id` ya permite el traspaso. |
 | D-53 | **EAN-13 internos determinísticos por nodo** (`2` + nodo + consecutivo + verificador) con contador local sin huecos. | Aleatorios con verificación de colisión | Dos nodos desconectados podían generar el mismo código aleatorio; con el código de nodo es imposible por construcción. |
+| D-55 | **El worker fiscal es un proceso aparte** (`python -m app.workers.fiscal`) que consume los eventos `fiscal.emitir` con `FOR UPDATE SKIP LOCKED`; la API nunca llama al proveedor. Los eventos `fiscal.emitir` son locales de la sede y el agente de sync NO debe replicarlos. | Llamar a Factus dentro de la venta | El POS debe vender sin internet; el reintento y el orden (NC tras su FE) se controlan en un solo lugar. |
+| D-56 | **`reference_code` = `documentos_fiscales.id`** y el payload sale del snapshot del documento. Reenviar es idempotente. | Número propio como referencia | Evita duplicados tras timeouts. |
 | D-54 | **Alias de vehículos** (tabla propia) aplicados a la búsqueda de texto libre, con normalización y trigramas en nombres. | Depender de coincidencia exacta de marca/modelo | La gente escribe «chevy» o «spark gt»; el vocabulario de la tienda se administra sin tocar código. |
 
 ---
@@ -2510,7 +2521,7 @@ Hoy **todo** documento de mostrador es FE; lo que cambia es el adquirente.
 
 ### (c) Devolución de una pieza equivocada (nota crédito)
 
-1. **Ubicar la venta**: *lee* `ventas.ventas` (por `numero_interno`, escaneo del QR/número del tiquete o `ix_ventas_tercero`), `ventas_items`, y lo ya devuelto (`devoluciones_items` por `ix_devoluciones_items_venta_item`) para calcular lo devolvible.
+1. **Ubicar la venta**: *lee* `ventas.ventas` (por `numero_interno`, escaneo del QR/número del tiquete o `ix_ventas_tercero_fecha`), `ventas_items`, y lo ya devuelto (`devoluciones_items` por `ix_devoluciones_items_venta_item`) para calcular lo devolvible.
 2. **Permiso**: si el cajero no tiene `pos.devolver`, supervisor con PIN → *escribe* `identidad.autorizaciones`.
 3. **Armar**: líneas, cantidades, motivo `pieza_equivocada` (`reintegra_stock_por_defecto=true`). `tipo_resolucion` = `nota_credito` (la `nota_ajuste` queda reservada para un futuro POS electrónico).
 4. **Confirmar — UNA transacción**:
@@ -2553,19 +2564,19 @@ Hoy **todo** documento de mostrador es FE; lo que cambia es el adquirente.
 ### (f) Cierre de turno con diferencia de efectivo
 
 1. **Pre-chequeo**: no debe haber `ventas` en `borrador` del turno (se confirman o pasan a `descartada`) ni documentos en estado que impida cerrar (los de contingencia no bloquean: siguen pendientes).
-2. **Esperado** (sin mostrárselo al cajero — conteo ciego): *lee* `ventas_pagos` de las ventas del turno (`ix_ventas_turno`, `ix_ventas_pagos_venta`) agrupado por medio, `movimientos_caja` (`ix_movcaja_turno`) y `devoluciones_pagos`. `efectivo_esperado = base + ventas_efectivo + ingresos − retiros − reembolsos_efectivo`. *Ej.:* base 200 000 + ventas 1 100 000 + ingresos 0 − retiros 50 000 = **1 250 000**.
+2. **Esperado** (sin mostrárselo al cajero — conteo ciego): *lee* `ventas_pagos` de las ventas del turno (`ix_ventas_turno`, `ix_ventas_pagos_venta_id`) agrupado por medio, `movimientos_caja` (`ix_movimientos_caja_turno`) y `devoluciones_pagos`. `efectivo_esperado = base + ventas_efectivo + ingresos − retiros − reembolsos_efectivo`. *Ej.:* base 200 000 + ventas 1 100 000 + ingresos 0 − retiros 50 000 = **1 250 000**.
 3. **(Opcional) retiro final** de efectivo para consignar: *escribe* `movimientos_caja` (`retiro`, motivo `retiro_seguridad`) **antes** del conteo.
 4. **Conteo**: el cajero cuenta el efectivo (**1 240 000**) y los vouchers/comprobantes por cada otro medio.
 5. **Diferencia**: −10 000 (faltante). Como ≠ 0, el CHECK exige supervisor: este escanea su carné y digita su PIN (verificación local); *escribe* `identidad.autorizaciones` (`cierre_con_diferencia`, permiso `caja.cerrar_con_diferencia`, `autorizado_por ≠ cajero`). La política puede tolerar diferencias menores a un umbral sin supervisor (`configuracion_sede`).
 6. **Cerrar — una transacción**: *escribe* `cajas.arqueos_turno` (una fila por medio con movimiento y siempre efectivo: esperado, contado, diferencia) · *actualiza* `cajas.turnos` (`estado='cerrado'`, `cerrado_por_id`, `supervisor_cierre_id`, `autorizacion_cierre_id`, `cerrado_at`, `efectivo_esperado`, `efectivo_contado`, `observaciones`; `diferencia` se calcula sola) → el trigger lo congela · *escribe* `auditoria.log_acciones` (`turno.cierre_con_diferencia`, `antes/despues`, `autorizado_por_id`, `dispositivo_id`, `ip`) · `outbox_eventos` (`turno.cerrado`).
-7. **Reportes**: se imprime el cierre Z. En la nube el tablero de diferencias se alimenta de `turnos.diferencia` y `auditoria`. Si el cajero intenta cerrar con diferencia sin supervisor, el `CHECK ck_turnos_diferencia_supervisor` lo rechaza aunque la app falle.
+7. **Reportes**: se imprime el cierre Z. En la nube el tablero de diferencias se alimenta de `turnos.diferencia` y `auditoria`. Desde la 0010 la diferencia nunca bloquea el cierre: según `autorizacion.diferencia_arqueo` queda libre o en revisión posterior (§4.5).
 
 ### (g) Búsqueda "pastillas de freno Chevrolet Spark 2018"
 
 **Solo lectura.** La app descompone la consulta: año `2018` (regex `\b(19|20)\d{2}\b`), vehículo `chevrolet spark` (contra marcas/modelos), texto `pastillas de freno`.
-1. **Resolver el vehículo**: *lee* `vehiculos_marcas` (slug `chevrolet`) → `vehiculos_modelos` (`spark%`) → `vehiculos_versiones` con `anios @> 2018` (`ix_versiones_modelo_anios`, GiST). Si salen varias versiones (Spark GT, Spark Life) se ofrecen como filtro o se aceptan todas.
-2. **Buscar productos compatibles**: join `productos_compatibilidades` (`ix_compat_version`) con `productos` filtrando `productos_busqueda.documento @@ websearch_to_tsquery('spanish', f_unaccent('pastillas de freno'))` (`ix_productos_busqueda`) y `activo AND vendible_pos` (o `publicado_web`); orden por `ts_rank`. `posicion` (delantera/trasera) sale como faceta.
-3. **Enriquecer**: *lee* `marcas`, `productos_imagenes` (principal), `precios` vigentes (`ix_precios_vigente`), `existencias` (`cantidad_disponible` por sede/bodega, `ix_existencias_producto`) y `productos_referencias` para mostrar OEM/equivalentes.
+1. **Resolver el vehículo**: *lee* `vehiculos_marcas` (slug `chevrolet`) → `vehiculos_modelos` (`spark%`) → `vehiculos_versiones` con `anios @> 2018` (`ix_vehiculos_versiones_modelo_anios`, GiST). Si salen varias versiones (Spark GT, Spark Life) se ofrecen como filtro o se aceptan todas.
+2. **Buscar productos compatibles**: join `productos_compatibilidades` (`ix_productos_compatibilidades_version_producto`) con `productos` filtrando `productos_busqueda.documento @@ websearch_to_tsquery('spanish', f_unaccent('pastillas de freno'))` (`ix_productos_busqueda_documento`) y `activo AND vendible_pos` (o `publicado_web`); orden por `ts_rank`. `posicion` (delantera/trasera) sale como faceta.
+3. **Enriquecer**: *lee* `marcas`, `productos_imagenes` (principal), `precios` vigentes (`ix_precios_vigente`), `existencias` (`cantidad_disponible` por sede/bodega, `ix_existencias_producto_id`) y `productos_referencias` para mostrar OEM/equivalentes.
 4. **Respaldos** si hay pocos resultados: (i) trigram sobre `productos_busqueda.texto` (`similarity`) por errores de digitación; (ii) si el vehículo no se reconoció, búsqueda de texto con todos los términos (el nombre/descripción incluyen "Spark"); (iii) si el texto es un número de parte, búsqueda por `referencia_normalizada`.
 5. Sin escrituras. (Una tabla de log de búsquedas para mejorar sinónimos es opcional: P-9.)
 
@@ -2613,16 +2624,16 @@ Leyenda: **Provisional** = decidido de forma provisional por el negocio, a confi
 | `ventas` | 7 | 1 | motivos_devolucion, ventas, ventas_items, ventas_pagos, devoluciones, devoluciones_items, devoluciones_pagos |
 | `pedidos` | 8 | 3 | carritos, carritos_items, pedidos, pedidos_items, pedidos_historial_estados, transacciones_pasarela, transacciones_pasarela_eventos, envios |
 | `cartera` | 4 | 3 | condiciones_credito, cuentas_por_cobrar, abonos, aplicacion_abonos |
-| `fiscal` | 7 | 1 | configuracion_proveedor, resoluciones_numeracion, documentos_fiscales, documentos_fiscales_items, documentos_fiscales_impuestos, documentos_fiscales_pagos, documentos_fiscales_eventos |
+| `fiscal` | 9 | 1 | configuracion_proveedor, resoluciones_numeracion, documentos_fiscales, documentos_fiscales_items, documentos_fiscales_impuestos, documentos_fiscales_pagos, documentos_fiscales_eventos, alertas_fiscales, worker_latidos |
 | `sync` | 4 | 1 | outbox_eventos, inbox_eventos, cursores_sync, conflictos_sync |
 | `auditoria` | 1 | 1 | log_acciones |
-| **Total** | **110** | | **Fase 1: 84 · Fase 2: 14 · Fase 3: 12** |
+| **Total** | **112** | | **Fase 1: 86 · Fase 2: 14 · Fase 3: 12** |
 
 ---
 
 ## 19. Fases de implementación
 
-### FASE 1 — implementada en `backend/` (86 tablas con la 0010; 84 hasta la 0009: 75 iniciales + `productos_busqueda` (0005) + `autorizaciones_consumos` y `sesiones_refresh` (0006) + `importaciones`, `entradas_mercancia` y `entradas_mercancia_lineas` (0007) + `solicitudes_inventario`, `contadores_ean` y `vehiculos_alias` (0008))
+### FASE 1 — implementada en `backend/` (88 tablas con la 0011; 86 con la 0010; 84 hasta la 0009: 75 iniciales + `productos_busqueda` (0005) + `autorizaciones_consumos` y `sesiones_refresh` (0006) + `importaciones`, `entradas_mercancia` y `entradas_mercancia_lineas` (0007) + `solicitudes_inventario`, `contadores_ean` y `vehiculos_alias` (0008))
 Schemas: `referencia`, `organizacion`, `identidad`, `catalogo`, `inventario` (parcial), `cajas`, `ventas`, `fiscal`, `sync`, `auditoria`.
 
 | Schema | Tablas de la Fase 1 |
@@ -2634,14 +2645,14 @@ Schemas: `referencia`, `organizacion`, `identidad`, `catalogo`, `inventario` (pa
 | `inventario` (11) | bodegas, ubicaciones, productos_ubicaciones, movimientos_inventario, existencias, reservas_stock, alertas_stock, importaciones, entradas_mercancia, entradas_mercancia_lineas, solicitudes_inventario |
 | `cajas` (7) | cajas, perifericos, dispositivos, turnos, motivos_movimiento_caja, movimientos_caja, arqueos_turno |
 | `ventas` (7) | motivos_devolucion, ventas, ventas_items, ventas_pagos, devoluciones, devoluciones_items, devoluciones_pagos |
-| `fiscal` (7) | configuracion_proveedor, resoluciones_numeracion, documentos_fiscales, documentos_fiscales_items, documentos_fiscales_impuestos, documentos_fiscales_pagos, documentos_fiscales_eventos |
+| `fiscal` (9) | configuracion_proveedor, resoluciones_numeracion, documentos_fiscales, documentos_fiscales_items, documentos_fiscales_impuestos, documentos_fiscales_pagos, documentos_fiscales_eventos, alertas_fiscales (0011), worker_latidos (0011) |
 | `sync` (4) | outbox_eventos, inbox_eventos, cursores_sync, conflictos_sync |
 | `auditoria` (2) | log_acciones, revisiones (0010) |
 
 Notas de Fase 1: (i) `productos_ubicaciones` y `alertas_stock` entran porque la política de stock negativo y el alistamiento las necesitan; los **ajustes manuales** (`ajustes_inventario`) llegan en Fase 2, pero el kardex ya admite los tipos `ajuste_*`/`traslado_*` (origen polimórfico, sin FK). (ii) `fiscal.documentos_fiscales` nace **sin** la columna `documento_soporte_id` y sin `pedido_id`. (iii) `identidad.cuentas_clientes` y `direcciones` existen aunque el e-commerce llegue en Fase 3.
 
 ### Migración 0009 — turnos, ventas POS y devoluciones (sin tablas nuevas)
-* `inventario.bodegas.tipo` + CHECKs + índice único de averías (§7.1). `cajas.turnos`: `umbral_diferencia`, `cierre_forzado`, `motivo_cierre_forzado` y `ck_turnos_diferencia_autorizada` (§9.4).
+* `inventario.bodegas.tipo` + CHECKs + índice único de averías (§7.1). `cajas.turnos`: `umbral_diferencia`, `cierre_forzado`, `motivo_cierre_forzado` y un CHECK de diferencia autorizada (retirado en la 0010, §9.4).
 * Semillas: permisos `cajas.turno.abrir`, `cajas.turno.cerrar`, `cajas.movimientos`, `cajas.cierre_forzado`, `pos.cambiar_precio`, `ventas.ver` (los existentes `pos.vender`, `pos.descuento_mayor`, `pos.devolver`, `pos.precio_manual`, `pos.retirar_efectivo`, `caja.cerrar_con_diferencia` se reutilizan); motivos de movimiento de caja y de devolución; las 8 claves de `configuracion_sede` por sede existente (§4.5).
 * Flujo de arranque: `inicializar` (empresa + sede + nodo edge + configuración) → `NODO_ID` en `.env` → `crear-admin` → `datos-demo` (opcional). La demo usa resoluciones **FE** (prefijo `DEMO`) y **NC** (`DNC`); la anterior usaba `POS_E`, que `crear_fe_de_venta` no usa.
 * Las ventas confirmadas crean la FE en `pendiente_envio` (prefijo y consecutivo NULL: los asigna el proveedor, modo `proveedor`) y los eventos `venta.confirmada` y `fiscal.emitir`; las devoluciones crean la NC referenciando la FE. Sin llamadas a Factus todavía.
@@ -2649,10 +2660,17 @@ Notas de Fase 1: (i) `productos_ubicaciones` y `alertas_stock` entran porque la 
 ### Migración 0010 — políticas de autorización, revisión posterior, aprobación remota y vendedor/cajero (2 tablas nuevas → 86 en total)
 * Tablas: `auditoria.revisiones` (§14.2) e `identidad.solicitudes_autorizacion` (§5.15), ambas `[M]` con `version` y trigger `tg_tocar`.
 * `ventas.ventas.cajero_id` (FK, `ix_ventas_cajero`; relleno de las ventas POS existentes con `created_by`) + `ck_ventas_confirmada_cajero`; `ck_ventas_canal_pos` relajado para el borrador (§10.1).
-* Se elimina `ck_turnos_diferencia_autorizada` (§9.4).
+* Se elimina el CHECK de diferencia autorizada de `cajas.turnos` (§9.4).
 * Permisos: `pos.precio_manual` se fusiona en `pos.cambiar_precio` (roles y autorizaciones existentes migrados); nuevos `autorizaciones.aprobar` y `revisiones.gestionar`; nuevo rol `vendedor`.
 * Configuración por sede: seis claves `autorizacion.*` nuevas; se retiran tres de la 0009 (§4.5).
 * `datos-demo --catalogo`: ~340 repuestos de demostración, 3 empleados y 5 clientes (ver CLAUDE.md, sección «Demo»).
+
+### Migración 0011 — integración fiscal (Factus), índices de FK y limpieza de permisos (2 tablas nuevas → 88 en total)
+* Tablas: `fiscal.alertas_fiscales` (§12.10) y `fiscal.worker_latidos` (§12.11, local del nodo).
+* Se eliminan `cajas.motivos_movimiento_caja.requiere_autorizacion` y `ventas.motivos_devolucion.requiere_autorizacion` (la regla vive en las políticas por sede). El cierre de turno ya no recibe `autorizacion_id`.
+* 42 índices `ix_<tabla>_<columna>` en FK (regla §1.9) y `ix_outbox_eventos_fiscal` (cola del worker: `fiscal.emitir` pendientes/enviados).
+* Permisos: nuevo `fiscal.gestionar` (reintentar documentos, resolver alertas); `caja.abrir`/`caja.cerrar` se fusionan en `cajas.turno.abrir`/`cajas.turno.cerrar` y `fiscal.reenviar` en `fiscal.gestionar` (roles migrados; el `downgrade` los restaura). `docs/permisos.md` regenerado.
+* Quien tiene el permiso de una acción no pide autorización, pero la acción queda auditada y, si supera el umbral de la política, genera una revisión posterior.
 
 ### FASE 2 — compras, traslados, conteos, documentos soporte (14 tablas)
 | Schema | Tablas |

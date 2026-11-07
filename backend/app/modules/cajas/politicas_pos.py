@@ -5,7 +5,8 @@
 * `revision_posterior`: deja la acción en `auditoria.revisiones` y sigue;
 * `requiere_autorizacion`: exige `autorizacion_id` de OTRO empleado (PIN de supervisor o aprobación remota; las dos
   producen una fila de `identidad.autorizaciones` de un solo uso). Quien ya tiene el permiso de la acción
-  (`PERMISO_DE_ACCION`: un supervisor, el propietario) no necesita pedirla.
+  (`PERMISO_DE_ACCION`: un supervisor, el propietario) no necesita pedirla, PERO la acción no pasa inadvertida: queda
+  en `auditoria.revisiones` (revisión posterior, `detalle.exento_por_permiso = true`) y en el log de auditoría.
 """
 
 from __future__ import annotations
@@ -65,7 +66,18 @@ def aplicar_politica(
 
     permiso = politicas.PERMISO_DE_ACCION[accion]
     if permiso in actor.permisos:
-        return ResultadoPolitica(politica, exento_por_permiso=True)
+        rev = revisiones.registrar(
+            db,
+            sede_id=sesion.sede_id,
+            accion=accion,
+            entidad_tipo=entidad_tipo,
+            entidad_id=entidad_id,
+            monto=monto,
+            empleado_id=sesion.empleado.id,
+            dispositivo_id=sesion.dispositivo_id,
+            detalle={**(detalle or {}), "exento_por_permiso": True, "permiso": permiso},
+        )
+        return ResultadoPolitica(politica, exento_por_permiso=True, revision_id=rev.id)
     if autorizacion_id is None:
         raise PermisoDenegado(
             f"Esta acción ('{accion}') requiere la autorización de otro empleado: PIN de supervisor "

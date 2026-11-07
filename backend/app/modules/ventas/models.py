@@ -163,7 +163,6 @@ class MotivoDevolucion(Base, Mutable):
     codigo: Mapped[str] = txt()
     nombre: Mapped[str] = txt()
     reintegra_stock_por_defecto: Mapped[bool] = flag(True)
-    requiere_autorizacion: Mapped[bool] = flag(True)
     activo: Mapped[bool] = flag(True)
 
 

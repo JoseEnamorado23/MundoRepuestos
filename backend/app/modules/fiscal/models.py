@@ -321,3 +321,58 @@ class DocumentoFiscalEvento(Base, SoloAgregar):
     respuesta: Mapped[dict | None] = mapped_column(JSONB)  # respuesta completa del proveedor
     duracion_ms: Mapped[int | None] = mapped_column()
     ocurrido_at: Mapped[datetime] = ts(null=False, server_default=text("now()"))
+
+
+class AlertaFiscal(Base, Mutable):
+    """Aviso para el backoffice sobre un documento que necesita atención (rechazo, reintentos agotados, descuadre…).
+
+    Hay a lo sumo UNA alerta abierta por (documento, tipo): el worker la reutiliza en vez de duplicarla.
+    """
+
+    __tablename__ = "alertas_fiscales"
+    __table_args__ = (
+        CheckConstraint(
+            "tipo IN ('rechazado','reintentos_agotados','configuracion','totales_descuadrados','nota_sin_factura')",
+            name="tipo",
+        ),
+        CheckConstraint("estado IN ('abierta','resuelta')", name="estado"),
+        CheckConstraint("(estado = 'resuelta') = (resuelta_at IS NOT NULL)", name="resuelta_coherente"),
+        Index(
+            "uq_alertas_fiscales_abierta",
+            "documento_id",
+            "tipo",
+            unique=True,
+            postgresql_where=text("estado = 'abierta'"),
+        ),
+        Index("ix_alertas_fiscales_documento", "documento_id"),
+        Index("ix_alertas_fiscales_sede_estado", "sede_id", "estado", text("created_at DESC")),
+        Index(
+            "ix_alertas_fiscales_resuelta_por_id",
+            "resuelta_por_id",
+            postgresql_where=text("resuelta_por_id IS NOT NULL"),
+        ),
+        {"schema": SCHEMA},
+    )
+    documento_id: Mapped[uuid.UUID] = fk(f"{SCHEMA}.documentos_fiscales.id")
+    sede_id: Mapped[uuid.UUID] = fk("organizacion.sedes.id")
+    tipo: Mapped[str] = txt()
+    mensaje: Mapped[str] = txt()
+    detalle: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    estado: Mapped[str] = txt(server_default="abierta")
+    resuelta_at: Mapped[datetime | None] = ts()
+    resuelta_por_id: Mapped[uuid.UUID | None] = fk("identidad.empleados.id", null=True)
+    comentario: Mapped[str | None] = txt(null=True)
+
+
+class WorkerLatido(Base):
+    """LOCAL del nodo (no se sincroniza): latido del worker fiscal para que `/health` sepa si está vivo."""
+
+    __tablename__ = "worker_latidos"
+    __table_args__ = {"schema": SCHEMA, "comment": "LOCAL del nodo: no se sincroniza"}
+    nombre: Mapped[str] = mapped_column(Text, primary_key=True)
+    ultimo_latido_at: Mapped[datetime] = ts(null=False, server_default=text("now()"))
+    ultimo_ciclo_at: Mapped[datetime | None] = ts()
+    ciclos: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    procesados: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    ultimo_error: Mapped[str | None] = txt(null=True)
+    version_app: Mapped[str | None] = txt(null=True)

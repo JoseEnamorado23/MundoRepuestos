@@ -21,6 +21,7 @@ os.environ.update(
     MAX_INTENTOS_EMPLEADO="3",
     BLOQUEO_MINUTOS="15",
     LOG_LEVEL="WARNING",
+    FISCAL_PROVEEDOR="simulado",  # las pruebas nunca llaman a Factus (salvo las marcadas `factus`)
 )
 
 import pytest
