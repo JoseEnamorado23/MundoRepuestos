@@ -1,6 +1,7 @@
 """Outbox: toda escritura de catálogo/inventario publica su evento en la MISMA transacción.
 
-Por ahora nadie consume los eventos (el agente de sync llega en otra etapa). `idempotency_key` es única: el
+Por ahora nadie consume los eventos (el agente de sync llega en otra etapa; solo replicará `alcance='sincronizable'`,
+ver `tipos_evento.py`). `idempotency_key` es única: el
 consumidor puede reintentar sin duplicar.
 """
 
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.base import nodo_actual, uuid7
 from app.modules.sync.models import OutboxEvento
+from app.modules.sync.tipos_evento import alcance_de
 
 
 def publicar_evento(
@@ -35,6 +37,7 @@ def publicar_evento(
         agregado_id=agregado_id,
         evento_tipo=tipo,
         version_agregado=version,
+        alcance=alcance_de(tipo),
         payload=jsonable_encoder(payload),
         idempotency_key=f"{nodo}:{agregado}:{agregado_id}:{tipo}:{evento_id}",
     )

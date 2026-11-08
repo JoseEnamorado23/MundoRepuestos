@@ -318,6 +318,7 @@ def test_archivos_invalidos(client, admin):
     assert validar(client, admin, vacio).json()["code"] == "archivo_vacio"
 
 
+@pytest.mark.rendimiento
 def test_5000_filas_se_validan_en_menos_de_30_segundos(client, admin, bodega_codigo):
     filas = []
     for i in range(5000):

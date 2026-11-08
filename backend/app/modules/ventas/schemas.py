@@ -227,3 +227,125 @@ class DevolucionOut(_Out):
     reembolsos: list[ReembolsoOut]
     documento_fiscal: DocumentoResumenOut | None
     repetida: bool = False
+
+
+# ------------------------------------------------------------------------------------------------ tirilla y estado fiscal
+class EstadoFiscalOut(_Out):
+    """Estado de la FE de una venta. `definitivo=true` ⇒ el POS deja de consultar."""
+
+    documento_id: uuid.UUID | None
+    tipo: str | None
+    estado: str | None
+    numero_completo: str | None
+    cufe: str | None
+    qr_data: str | None
+    leyenda: str | None
+    definitivo: bool
+
+
+class EstadoFiscalVentaOut(EstadoFiscalOut):
+    venta_id: uuid.UUID
+
+
+class TicketEmpresaOut(_Out):
+    nit: str
+    razon_social: str
+    nombre_comercial: str | None
+    direccion: str | None
+    telefono: str | None
+
+
+class TicketSedeOut(_Out):
+    codigo: str
+    nombre: str
+    direccion: str | None
+    telefono: str | None
+
+
+class TicketCajaOut(_Out):
+    codigo: str
+    nombre: str
+
+
+class TicketVentaOut(_Out):
+    id: uuid.UUID
+    numero_interno: int
+    numero_ticket: str
+    codigo_barras: str = Field(
+        description="Texto para el Code128 de la tirilla; con él se busca la venta (devoluciones)."
+    )
+    fecha: datetime | None
+    placa_vehiculo: str | None
+
+
+class TicketClienteOut(_Out):
+    documento: str
+    tipo_documento: str
+    nombre: str
+    es_consumidor_final: bool
+
+
+class TicketResolucionOut(_Out):
+    numero_resolucion: str | None
+    fecha_resolucion: datetime | None
+    prefijo: str | None
+    rango_desde: int | None
+    rango_hasta: int | None
+    vigente_desde: datetime | None
+    vigente_hasta: datetime | None
+
+
+class TicketLineaOut(_Out):
+    linea: int
+    sku: str | None
+    descripcion: str
+    cantidad: Decimal
+    unidad: str | None
+    precio_unitario: Decimal
+    descuento_valor: Decimal
+    tarifa_pct: Decimal
+    total_linea: Decimal
+
+
+class TicketImpuestoOut(_Out):
+    codigo: str
+    tarifa_pct: Decimal
+    base_gravable: Decimal
+    impuesto: Decimal
+
+
+class TicketTotalesOut(_Out):
+    subtotal: Decimal
+    descuento_total: Decimal
+    impuesto_total: Decimal
+    redondeo: Decimal
+    total: Decimal
+
+
+class TicketPagoOut(_Out):
+    medio_pago_codigo: str
+    medio_pago: str | None
+    valor: Decimal
+    valor_recibido: Decimal | None
+    cambio_devuelto: Decimal
+    referencia: str | None
+    ultimos_digitos: str | None
+
+
+class TicketOut(_Out):
+    """Todos los datos de la tirilla; el POS los renderiza (ESC/POS o vista previa HTML)."""
+
+    empresa: TicketEmpresaOut
+    sede: TicketSedeOut
+    caja: TicketCajaOut
+    cajero: str | None
+    vendedor: str | None
+    venta: TicketVentaOut
+    cliente: TicketClienteOut
+    resolucion: TicketResolucionOut | None
+    lineas: list[TicketLineaOut]
+    impuestos: list[TicketImpuestoOut]
+    totales: TicketTotalesOut
+    pagos: list[TicketPagoOut]
+    cambio_total: Decimal
+    fiscal: EstadoFiscalOut

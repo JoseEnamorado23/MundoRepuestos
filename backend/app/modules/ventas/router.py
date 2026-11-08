@@ -6,7 +6,7 @@ Los routers solo validan la entrada, llaman al caso de uso (`app.aplicacion`) y 
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
@@ -27,8 +27,10 @@ from app.modules.ventas.schemas import (
     DevolucionOut,
     DocumentoResumenOut,
     EsperaIn,
+    EstadoFiscalVentaOut,
     TerceroOut,
     TerceroRapidoIn,
+    TicketOut,
     VentaIn,
     VentaOut,
     VentaResumenOut,
@@ -170,7 +172,7 @@ def detalle_venta(
 
 @router.get(
     "/ventas/{venta_id}/ticket",
-    response_model=dict[str, Any],
+    response_model=TicketOut,
     summary="Todos los datos de la tirilla (empresa, sede, resolución, ítems, impuestos, totales, pagos, estado fiscal)",
 )
 def ticket(venta_id: uuid.UUID, db: Db, actor: Ve, sede_id: Annotated[uuid.UUID | None, Query()] = None):
@@ -179,7 +181,7 @@ def ticket(venta_id: uuid.UUID, db: Db, actor: Ve, sede_id: Annotated[uuid.UUID 
 
 @router.get(
     "/ventas/{venta_id}/estado-fiscal",
-    response_model=dict[str, Any],
+    response_model=EstadoFiscalVentaOut,
     summary="Estado de la factura electrónica de la venta (consulta liviana; el POS la repite hasta `definitivo`)",
 )
 def estado_fiscal(venta_id: uuid.UUID, db: Db, actor: Ve, sede_id: Annotated[uuid.UUID | None, Query()] = None):

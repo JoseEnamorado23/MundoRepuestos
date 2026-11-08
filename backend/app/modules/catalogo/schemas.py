@@ -367,6 +367,7 @@ class ProductoBuscadoOut(BaseModel):
     stock_disponible: Decimal
     stock_minimo: Decimal
     relevancia: float
+    ubicacion: str | None = Field(None, description="Código de la ubicación principal en la sede (estante/pasillo)")
 
 
 class PaginaProductos(Pagina[ProductoBuscadoOut]):
@@ -392,6 +393,7 @@ class ProductoEscaneadoOut(BaseModel):
     tratamiento: str
     precio: Decimal | None
     stock_disponible: Decimal
+    ubicacion: str | None = Field(None, description="Código de la ubicación principal en la sede")
 
 
 CategoriaNodo.model_rebuild()

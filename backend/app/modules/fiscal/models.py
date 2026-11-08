@@ -40,6 +40,7 @@ EstadoDocumentoFiscal = pg_enum(
     "aceptado",
     "rechazado",
     "contingencia",
+    "anulado",  # FE rechazada (nunca aceptada) reemplazada por una corrección: no requiere nota crédito
 )
 TipoEventoFiscal = pg_enum(
     SCHEMA,
@@ -54,6 +55,7 @@ TipoEventoFiscal = pg_enum(
     "contingencia_transmitida",
     "estado_consultado",
     "webhook_proveedor",
+    "correccion",
 )
 
 
@@ -191,6 +193,13 @@ class DocumentoFiscal(Base, Mutable):
             postgresql_where=text("estado IN ('pendiente_envio','contingencia','rechazado')"),
         ),
         Index(
+            "uq_documentos_fiscales_corrige",
+            "documento_corrige_id",
+            unique=True,
+            postgresql_where=text("documento_corrige_id IS NOT NULL"),
+        ),
+        CheckConstraint("documento_corrige_id IS DISTINCT FROM id", name="corrige_otro"),
+        Index(
             "ix_documentos_fiscales_referenciado",
             "documento_referenciado_id",
             postgresql_where=text("documento_referenciado_id IS NOT NULL"),
@@ -218,6 +227,8 @@ class DocumentoFiscal(Base, Mutable):
     devolucion_id: Mapped[uuid.UUID | None] = fk("ventas.devoluciones.id", null=True)
     documento_referenciado_id: Mapped[uuid.UUID | None] = fk(f"{SCHEMA}.documentos_fiscales.id", null=True)
     concepto_nota_codigo: Mapped[str | None] = txt(null=True)
+    # FE que reemplaza a una FE rechazada y anulada (corregir y reemitir, 0012). El anterior queda `anulado`.
+    documento_corrige_id: Mapped[uuid.UUID | None] = fk(f"{SCHEMA}.documentos_fiscales.id", null=True)
     forma_pago_codigo: Mapped[str] = fkt("referencia.formas_pago.codigo", server_default="1")
     fecha_vencimiento: Mapped[date | None] = mapped_column(Date)
     emisor_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)

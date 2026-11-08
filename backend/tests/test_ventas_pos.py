@@ -300,4 +300,7 @@ def test_consulta_de_ventas_y_ticket(conn, db, pos):
         assert k in t, k
     assert t["resolucion"]["prefijo"] == "TF" and t["fiscal"]["estado"] == "pendiente_envio"
     assert t["fiscal"]["leyenda"] and t["venta"]["numero_ticket"].endswith("000001")
+    # Code128 de la tirilla: caja + numero_interno (el consecutivo es por caja); el escáner devuelve este texto
+    assert t["venta"]["codigo_barras"] == t["venta"]["numero_ticket"]
+    assert t["venta"]["codigo_barras"].isascii() and t["venta"]["numero_interno"] == 1
     assert D(t["totales"]["total"]) == D("20000") and f.hoy()

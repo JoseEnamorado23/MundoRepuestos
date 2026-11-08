@@ -39,7 +39,12 @@ class Settings(BaseSettings):
 
     # --- API ---
     log_level: str = Field("INFO", validation_alias=_alias("log_level"))
-    cors_origins: str = Field("", validation_alias=_alias("cors_origins"))  # separados por coma
+    # separados por coma. Por defecto: los orígenes del POS de escritorio (Tauri 2: `tauri://localhost` en macOS/Linux,
+    # `http://tauri.localhost` en Windows) y el servidor de desarrollo del POS (Vite, puerto 1420). Vacío = sin CORS.
+    cors_origins: str = Field(
+        "tauri://localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420",
+        validation_alias=_alias("cors_origins"),
+    )
 
     # --- Seguridad ---
     jwt_secret: str | None = Field(None, validation_alias=_alias("jwt_secret"))

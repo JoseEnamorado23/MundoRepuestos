@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -347,6 +348,8 @@ def procesar_siguiente(
 
     es_nota = doc.tipo_documento_codigo not in ("FE", "POS_E")
     referenciado = db.get(DocumentoFiscal, doc.documento_referenciado_id) if doc.documento_referenciado_id else None
+    if es_nota and referenciado is not None:
+        referenciado = _fe_vigente(db, referenciado)  # la FE original pudo ser anulada y reemitida corregida
     if es_nota and (referenciado is None or referenciado.estado != "aceptado"):
         rechazada = referenciado is not None and referenciado.estado == "rechazado"
         if rechazada:
@@ -373,6 +376,12 @@ def procesar_siguiente(
         "reintento": bool(payload.get("reintento")),
     }
     try:
+        if payload.get("borrar_remoto_de") and intento == 1:
+            # FE corregida: el rechazado anterior sigue sin validar en el proveedor y podría bloquear (409) el envío
+            try:
+                proveedor.eliminar_pendiente(tipo, uuid.UUID(str(payload["borrar_remoto_de"])))
+            except ErrorProveedor:
+                pass  # si no se pudo borrar, el flujo de 409 lo reintenta
         if payload.get("borrar_remoto") and intento == 1:
             # reintento manual de un rechazado: el proveedor bloquea nuevos envíos mientras exista el no validado
             proveedor.eliminar_pendiente(tipo, doc.id)
@@ -632,6 +641,163 @@ def reintentar(
     return doc
 
 
+def _fe_vigente(db: Session, doc: DocumentoFiscal) -> DocumentoFiscal:
+    """Sigue la cadena de correcciones: una FE `anulado` se sustituye por la FE que la corrige."""
+    for _ in range(20):  # tope defensivo
+        if doc.estado != "anulado":
+            return doc
+        siguiente = db.scalar(select(DocumentoFiscal).where(DocumentoFiscal.documento_corrige_id == doc.id))
+        if siguiente is None:
+            return doc
+        doc = siguiente
+    return doc
+
+
+CAMPOS_ADQUIRENTE_CORREGIBLES = (
+    "tipo_documento_codigo",
+    "numero_documento",
+    "dv",
+    "tipo_persona_codigo",
+    "nombre_completo",
+    "razon_social",
+    "regimen_codigo",
+    "responsabilidades",
+    "email",
+    "telefono",
+    "direccion",
+    "municipio_codigo",
+)
+
+
+def corregir_y_reemitir(
+    db: Session, doc_id: uuid.UUID, actor_id: uuid.UUID | None, cambios_adquirente: dict[str, Any], motivo: str
+) -> DocumentoFiscal:
+    """Backoffice (fiscal.gestionar): corrige los datos del adquirente de una FE RECHAZADA y la reemite.
+
+    Solo aplica a una FE que la DIAN nunca aceptó. El documento rechazado queda `anulado` (sin NC) y se crea uno nuevo
+    para la MISMA venta, con los mismos ítems, impuestos, pagos y totales (NO se pueden cambiar por esta vía), un
+    snapshot de adquirente corregido, `documento_corrige_id` apuntando al anterior y su propio `reference_code`.
+    """
+    from app.core.errores import NoEncontrado, ReglaNegocio
+    from app.modules.fiscal.servicios import _cargar_hijos, _hash, _publicar
+
+    desconocidos = set(cambios_adquirente) - set(CAMPOS_ADQUIRENTE_CORREGIBLES)
+    if desconocidos or not cambios_adquirente:
+        raise ReglaNegocio(
+            "Solo se pueden corregir datos del adquirente: " + ", ".join(CAMPOS_ADQUIRENTE_CORREGIBLES) + ".",
+            code="correccion_campos_invalidos",
+            campos=sorted(desconocidos),
+        )
+    cambios = dict(cambios_adquirente)
+    viejo = db.scalar(select(DocumentoFiscal).where(DocumentoFiscal.id == doc_id).with_for_update())
+    if viejo is None:
+        raise NoEncontrado("Documento fiscal no encontrado.")
+    if viejo.tipo_documento_codigo not in ("FE", "POS_E") or viejo.venta_id is None:
+        raise ReglaNegocio(
+            "Solo se corrigen facturas de venta rechazadas (las notas crédito no).", code="correccion_no_aplica"
+        )
+    if viejo.estado != "rechazado" or viejo.aceptado_at is not None or viejo.cufe_cude is not None or not viejo.vigente:
+        raise ReglaNegocio(
+            "Solo se corrige un documento RECHAZADO que la DIAN nunca aceptó; "
+            "uno aceptado se corrige con una nota crédito.",
+            code="correccion_no_aplica",
+            estado=viejo.estado,
+        )
+    if db.scalar(select(DocumentoFiscal.id).where(DocumentoFiscal.documento_corrige_id == viejo.id)) is not None:
+        raise ReglaNegocio("Este documento ya fue corregido.", code="ya_corregido")
+
+    adquirente = {**viejo.adquirente_snapshot, **cambios}
+    if adquirente.get("es_consumidor_final") and ("numero_documento" in cambios or "tipo_documento_codigo" in cambios):
+        adquirente["es_consumidor_final"] = False
+    adquirente = jsonable_encoder(adquirente)
+    nombre = (
+        adquirente.get("razon_social") if adquirente.get("tipo_persona_codigo") == "1" else None
+    ) or adquirente.get("nombre_completo")
+    items = db.scalars(
+        select(DocumentoFiscalItem)
+        .where(DocumentoFiscalItem.documento_id == viejo.id)
+        .order_by(DocumentoFiscalItem.linea)
+    ).all()
+    pagos = db.scalars(
+        select(DocumentoFiscalPago)
+        .where(DocumentoFiscalPago.documento_id == viejo.id)
+        .order_by(DocumentoFiscalPago.linea)
+    ).all()
+    columnas_item = (
+        "venta_item_id producto_id codigo descripcion unidad_codigo cantidad precio_unitario valor_unitario_base "
+        "descuento_valor base_gravable impuesto_valor total_linea tributo_codigo tarifa_pct"
+    ).split()
+    lineas = [{c: getattr(i, c) for c in columnas_item} for i in items]
+    pagos_doc = [dict(medio_pago_codigo=p.medio_pago_codigo, valor=p.valor, referencia=p.referencia) for p in pagos]
+
+    # 1) el rechazado deja de ser el vigente de la venta (índice único) y queda anulado, sin NC
+    viejo.estado, viejo.vigente, viejo.proximo_intento_at = "anulado", False, None
+    resolver_alertas(
+        db, viejo, ("rechazado", "reintentos_agotados", "configuracion"), actor_id, f"Corregido y reemitido: {motivo}"
+    )
+    db.flush()
+
+    # 2) documento nuevo: mismo contenido económico, adquirente corregido, otro reference_code (su id)
+    nuevo = DocumentoFiscal(
+        empresa_id=viejo.empresa_id,
+        sede_id=viejo.sede_id,
+        caja_id=viejo.caja_id,
+        tipo_documento_codigo=viejo.tipo_documento_codigo,
+        resolucion_id=viejo.resolucion_id,
+        fecha_emision=viejo.fecha_emision,
+        venta_id=viejo.venta_id,
+        documento_corrige_id=viejo.id,
+        forma_pago_codigo=viejo.forma_pago_codigo,
+        fecha_vencimiento=viejo.fecha_vencimiento,
+        emisor_snapshot=viejo.emisor_snapshot,
+        adquirente_tercero_id=viejo.adquirente_tercero_id,
+        adquirente_snapshot=adquirente,
+        adquirente_numero_documento=str(adquirente["numero_documento"]),
+        adquirente_nombre=nombre or viejo.adquirente_nombre,
+        moneda=viejo.moneda,
+        subtotal=viejo.subtotal,
+        descuento_total=viejo.descuento_total,
+        impuesto_total=viejo.impuesto_total,
+        redondeo=viejo.redondeo,
+        total=viejo.total,
+        estado="borrador",
+        hash_contenido=_hash(
+            {
+                "tipo": viejo.tipo_documento_codigo,
+                "corrige": viejo.id,
+                "fecha": viejo.fecha_emision,
+                "emisor": viejo.emisor_snapshot,
+                "adquirente": adquirente,
+                "totales": [viejo.subtotal, viejo.descuento_total, viejo.impuesto_total, viejo.redondeo, viejo.total],
+                "lineas": [{k: v for k, v in ln.items() if k != "venta_item_id"} for ln in lineas],
+                "pagos": pagos_doc,
+            }
+        ),
+        created_by=actor_id,
+    )
+    db.add(nuevo)
+    db.flush()
+    _cargar_hijos(db, nuevo, lineas, pagos_doc, actor_id)
+    nuevo.estado = "pendiente_envio"
+    db.flush()
+    _publicar(db, nuevo, actor_id, {"corrige_documento_id": viejo.id, "borrar_remoto_de": viejo.id})
+
+    _evento_bitacora(db, viejo, "correccion", mensaje=f"Anulado y reemplazado por {nuevo.id}: {motivo}")
+    _evento_bitacora(db, nuevo, "correccion", mensaje=f"Corrige al documento rechazado {viejo.id}: {motivo}")
+    registrar_accion(
+        db,
+        "fiscal.documento_corregido",
+        actor_id=actor_id,
+        sede_id=viejo.sede_id,
+        entidad_tipo="documento_fiscal",
+        entidad_id=viejo.id,
+        # solo los NOMBRES de los campos: los valores son datos personales y ya viven en los snapshots
+        despues={"documento_nuevo_id": str(nuevo.id), "campos_corregidos": sorted(cambios)},
+        motivo=motivo,
+    )
+    return nuevo
+
+
 def contadores(db: Session) -> dict[str, Any]:
     """Para `/health`: documentos por atender y estado del worker."""
     filas = dict(
@@ -653,6 +819,7 @@ __all__ = [
     "armar_emision",
     "completar_archivos",
     "contadores",
+    "corregir_y_reemitir",
     "espera_backoff",
     "partir_numero",
     "procesar_siguiente",

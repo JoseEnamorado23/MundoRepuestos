@@ -35,6 +35,28 @@ services:
     ports:
       - "${ADMINER_PORT:-8080}:8080"
 
+  # API. Comparte con `worker-fiscal` el MISMO volumen nombrado de archivos (`mundorepuestos_media` en /data/media):
+  # el PDF/XML que guarda el worker al aceptarse una factura se descarga desde `GET /fiscal/documentos/{id}/pdf`.
+  # Perfil "app": `docker compose --profile app up -d api`. Requiere NODO_ID/MODE y JWT_SECRET/PIN_PEPPER en .env.
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: mundorepuestos-api
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MEDIA_DIR: /data/media
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - mundorepuestos_media:/data/media
+
   # Worker de facturación electrónica (envía a la DIAN vía Factus los documentos `pendiente_envio`).
   # Perfil "app": `docker compose --profile app up -d worker-fiscal`. Requiere NODO_ID/MODE y FACTUS_* en .env.
   worker-fiscal:

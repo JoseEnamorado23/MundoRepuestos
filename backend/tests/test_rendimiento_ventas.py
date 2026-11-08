@@ -21,7 +21,8 @@ MUESTRAS = 60
 # Objetivo de producto: p95 < 200 ms. Con PostgreSQL en Docker Desktop (Windows) cada ida y vuelta cuesta ~1,3 ms y la
 # venta de 10 ítems hace ~78 sentencias, así que aquí el piso es ~100 ms solo de latencia; por eso el umbral por
 # defecto de la suite (guardia contra regresiones) es más holgado. En el mini PC (BD local) exigir 200:
-#   RENDIMIENTO_P95_MS=200 uv run pytest tests/test_rendimiento_ventas.py -s
+#   RENDIMIENTO_P95_MS=200 uv run pytest -m rendimiento tests/test_rendimiento_ventas.py -s
+# (no corre por defecto: ver `addopts` en pyproject.toml)
 LIMITE_P95_MS = float(os.environ.get("RENDIMIENTO_P95_MS", "300"))
 
 
@@ -40,6 +41,7 @@ def bd(url_base, monkeypatch):
         borrar_bd(url_base, BD)
 
 
+@pytest.mark.rendimiento
 def test_confirmar_venta_de_10_items_p95(bd):
     with bd.begin() as c, Session(bind=c, join_transaction_mode="create_savepoint", expire_on_commit=False) as db:
         pm = construir_pos(c, db)

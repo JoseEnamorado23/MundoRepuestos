@@ -1889,7 +1889,7 @@ Alertas (job): `consecutivo_actual >= 90 %` del rango o `vigente_hasta - hoy <= 
 
 ### 12.3 `fiscal.documentos_fiscales` — `[M]` con **congelamiento por columna** · Clase S
 **Propósito**: cada documento DIAN: **FE, NC, ND** (hoy), y `POS_E`, `NA`, `DS` en el futuro. Al salir de `borrador` su **contenido es inmutable**; solo cambian las columnas de *transporte*. Lo impone el trigger `fiscal.tg_documentos_congelar`: rechaza cualquier `UPDATE` que cambie una columna fuera de esta lista blanca: `estado, cufe_cude, qr_data, proveedor_documento_id, proveedor_respuesta_codigo, xml_url, pdf_url, intentos, ultimo_error, ultimo_intento_at, proximo_intento_at, enviado_at, aceptado_at, vigente, es_contingencia, contingencia_motivo, prefijo, consecutivo, numero_completo, updated_at, version`. Excepción: `prefijo`/`consecutivo`/`numero_completo` solo pueden cambiar **mientras sean NULL** (se asignan una vez, cuando el proveedor responde). `DELETE` siempre prohibido.
-ENUM `fiscal.estado_documento_fiscal ('borrador','pendiente_envio','enviado','aceptado','rechazado','contingencia')`. `contingencia` queda reservado para el procedimiento de contingencia del proveedor (P-19); hoy una venta offline queda en `pendiente_envio`.
+ENUM `fiscal.estado_documento_fiscal ('borrador','pendiente_envio','enviado','aceptado','rechazado','contingencia','anulado')`. **`anulado` (0012)**: FE *rechazada* (nunca aceptada por la DIAN) que fue reemplazada por una corrección (`POST /fiscal/documentos/{id}/corregir`); no requiere nota crédito. Además `fiscal.tipo_evento_fiscal` gana `correccion`. `contingencia` queda reservado para el procedimiento de contingencia del proveedor (P-19); hoy una venta offline queda en `pendiente_envio`.
 
 | Columna | Tipo | Null | Default | Notas |
 |---|---|---|---|---|
@@ -1905,6 +1905,7 @@ ENUM `fiscal.estado_documento_fiscal ('borrador','pendiente_envio','enviado','ac
 | `venta_id` | uuid | NULL | — | → `ventas.ventas` RESTRICT. FE. |
 | `devolucion_id` | uuid | NULL | — | → `ventas.devoluciones` RESTRICT. NC / ND. |
 | `documento_referenciado_id` | uuid | NULL | — | → `documentos_fiscales(id)` RESTRICT. Documento que la nota corrige. |
+| `documento_corrige_id` | uuid | NULL | — | **(0012)** → `documentos_fiscales(id)` RESTRICT. Solo FE: la FE rechazada y `anulado` a la que esta reemplaza (mismos ítems, impuestos, pagos y totales; adquirente corregido; otro `reference_code` = su `id`). UNIQUE parcial `uq_documentos_fiscales_corrige`: una sola corrección por documento. `ck_documentos_fiscales_corrige_otro (documento_corrige_id IS DISTINCT FROM id)`. Columna fijada al crear (en `borrador`), por eso no está en la lista blanca de transporte. |
 | `concepto_nota_codigo` | text | NULL | — | FK compuesta `(tipo_documento_codigo, concepto_nota_codigo) → referencia.conceptos_nota` RESTRICT. |
 | `forma_pago_codigo` | text | NOT NULL | `'1'` | → `referencia.formas_pago` RESTRICT |
 | `fecha_vencimiento` | date | NULL | — | Crédito. |
@@ -2097,6 +2098,7 @@ ENUM `sync.estado_outbox ('pendiente','enviado','confirmado','fallido')`.
 | `version_agregado` | integer | NOT NULL | — | Versión del agregado tras el cambio (para ordenar por agregado y detectar huecos). |
 | `payload_version` | smallint | NOT NULL | `1` | Versión del esquema del payload (evolución sin romper nodos viejos). |
 | `payload` | jsonb | NOT NULL | — | El agregado completo o el delta; autosuficiente. |
+| `alcance` | text | NOT NULL | `'sincronizable'` | **(0012)** `local` \| `sincronizable` (`ck_outbox_eventos_alcance`). `local` = estado operativo del nodo que **nunca** se replica (todo `fiscal.*`, p. ej. `fiscal.emitir`). Lo fija `publicar_evento` con el registro central `app/modules/sync/tipos_evento.py` (prefijos locales: `fiscal.`); un tipo nuevo es sincronizable salvo que se registre allí. |
 | `estado` | estado_outbox | NOT NULL | `'pendiente'` | |
 | `intentos` | smallint | NOT NULL | `0` | |
 | `proximo_intento_at` | timestamptz | NOT NULL | `now()` | Backoff exponencial con tope. |
@@ -2104,6 +2106,8 @@ ENUM `sync.estado_outbox ('pendiente','enviado','confirmado','fallido')`.
 | `idempotency_key` | text | NOT NULL | — | `{nodo_origen}:{agregado_tipo}:{agregado_id}:{evento_tipo}:{version_agregado}`. Determinista: regenerar el evento produce la misma clave. |
 | `created_at` | timestamptz | NOT NULL | `now()` | |
 | `enviado_at`, `confirmado_at` | timestamptz | NULL | — | |
+
+**Regla para el agente de sync (obligatoria):** solo lee y replica eventos con `alcance = 'sincronizable'`; ignora (no envía, no marca) los `local`. Ejemplo: `fiscal.emitir` es la cola del worker de facturación de la sede y la nube no debe verla; `documento_fiscal.aceptado` (resultado) sí es sincronizable.
 
 Índices: `uq_outbox_eventos_idempotency_key (idempotency_key)`; `ix_outbox_eventos_cola (proximo_intento_at, secuencia) WHERE estado IN ('pendiente','fallido')` — lo único que el agente consulta continuamente (parcial: la cola viva es pequeña aunque la tabla tenga millones); `ix_outbox_eventos_agregado (agregado_tipo, agregado_id, version_agregado)` — diagnóstico y reconstrucción. Purga: `confirmado` con más de 30 días → archivo/borrado (única tabla donde el borrado es política).
 
@@ -2671,6 +2675,11 @@ Notas de Fase 1: (i) `productos_ubicaciones` y `alertas_stock` entran porque la 
 * 42 índices `ix_<tabla>_<columna>` en FK (regla §1.9) y `ix_outbox_eventos_fiscal` (cola del worker: `fiscal.emitir` pendientes/enviados).
 * Permisos: nuevo `fiscal.gestionar` (reintentar documentos, resolver alertas); `caja.abrir`/`caja.cerrar` se fusionan en `cajas.turno.abrir`/`cajas.turno.cerrar` y `fiscal.reenviar` en `fiscal.gestionar` (roles migrados; el `downgrade` los restaura). `docs/permisos.md` regenerado.
 * Quien tiene el permiso de una acción no pide autorización, pero la acción queda auditada y, si supera el umbral de la política, genera una revisión posterior.
+
+### Migración 0012 — alcance del outbox y corrección de FE rechazadas (0 tablas nuevas → 88)
+* `sync.outbox_eventos.alcance` (`local` | `sincronizable`, defecto `sincronizable`, `ck_outbox_eventos_alcance`); backfill: `fiscal.%` → `local`. Registro central en `app/modules/sync/tipos_evento.py`. Regla para el agente de sync en §13.1.
+* `fiscal.estado_documento_fiscal` + `anulado`; `fiscal.tipo_evento_fiscal` + `correccion` (`ALTER TYPE ... ADD VALUE`; el `downgrade` no puede quitarlos de un ENUM, devuelve los `anulado` a `rechazado`).
+* `fiscal.documentos_fiscales.documento_corrige_id` + `ck_documentos_fiscales_corrige_otro` + `uq_documentos_fiscales_corrige` (§12.3). Flujo: FE `rechazado` → `corregir` (permiso `fiscal.gestionar`, auditado `fiscal.documento_corregido`) → la rechazada queda `anulado`/`vigente=false` y nace una FE nueva `pendiente_envio` para la misma venta. Las NC pendientes que apuntan a la FE anulada se emiten contra la nueva (el worker sigue la cadena `documento_corrige_id`). Solo FE de venta; las NC rechazadas se reintentan, no se corrigen.
 
 ### FASE 2 — compras, traslados, conteos, documentos soporte (14 tablas)
 | Schema | Tablas |

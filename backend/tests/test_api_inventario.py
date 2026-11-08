@@ -106,6 +106,31 @@ def test_bodegas_y_ubicaciones_crud(client, mundo, admin, producto):
     assert client.get(f"{API}/inventario/bodegas", params={"sede_id": mundo.sede}, headers=admin).json()["total"] == 2
 
 
+def test_la_ubicacion_principal_aparece_en_busqueda_y_escaner(client, mundo, admin, producto):
+    """El POS muestra dónde está el repuesto: la ubicación principal DE LA SEDE (no la de otra sede)."""
+    buscar = lambda **p: client.get(f"{API}/catalogo/productos/buscar", params={"q": "INV-1", **p}, headers=admin)  # noqa: E731
+    sin = client.post(
+        f"{API}/inventario/bodegas", json={"sede_id": mundo.sede, "codigo": "BU", "nombre": "BU"}, headers=admin
+    )
+    bid = sin.json()["id"]
+    uid = client.post(
+        f"{API}/inventario/ubicaciones", json={"bodega_id": bid, "codigo": "Z-09-2", "pasillo": "Z"}, headers=admin
+    ).json()["id"]
+    assert buscar(sede_id=mundo.sede).json()["items"][0]["ubicacion"] is None  # aún sin ubicación
+    client.put(
+        f"{API}/inventario/productos/{producto}/ubicaciones",
+        json={"ubicacion_id": uid, "es_principal": True},
+        headers=admin,
+    )
+    assert buscar(sede_id=mundo.sede).json()["items"][0]["ubicacion"] == "Z-09-2"
+    assert buscar(sede_id=mundo.sede2).json()["items"][0]["ubicacion"] is None  # otra sede: no se muestra
+
+    cajero = h.bearer(h.sesion_pos(client, mundo, "111111"))
+    r = client.get(f"{API}/pos/productos/codigo/INV-1", headers=cajero)
+    assert r.status_code == 200, r.text
+    assert r.json()["ubicacion"] == "Z-09-2"
+
+
 # ------------------------------------------------------------------------------------ costo promedio ponderado
 def test_costo_promedio_ponderado_con_tres_entradas(client, mundo, admin, producto):
     bodega = mundo.ent["bodega"]

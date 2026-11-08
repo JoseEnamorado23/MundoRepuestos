@@ -130,6 +130,9 @@ def ticket(db: Session, venta_id: uuid.UUID, sede_id: uuid.UUID | None) -> dict:
             "id": v.id,
             "numero_interno": v.numero_interno,
             "numero_ticket": f"{caja.codigo}-{v.numero_interno:06d}",
+            # Texto para imprimir como Code128 (juego B, ASCII imprimible): el escáner lo devuelve tal cual y con él
+            # se busca la venta en las devoluciones. Incluye la caja porque `numero_interno` es consecutivo POR CAJA.
+            "codigo_barras": f"{caja.codigo}-{v.numero_interno:06d}",
             "fecha": v.confirmada_at,
             "placa_vehiculo": v.placa_vehiculo,
         },

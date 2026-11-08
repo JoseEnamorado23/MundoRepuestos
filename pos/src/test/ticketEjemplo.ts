@@ -1,0 +1,75 @@
+import type { Ticket } from '@/api/pos'
+
+/** Ticket fijo para probar plantillas y la codificación ESC/POS (datos inventados). */
+export function ticketEjemplo(sobrescribir: Partial<Ticket['fiscal']> = {}): Ticket {
+  return {
+    empresa: {
+      nit: '900000001-7',
+      razon_social: 'Mi Empresa SAS',
+      nombre_comercial: 'MundoRepuestos',
+      direccion: 'Cra 10 # 20-30',
+      telefono: '6011234567',
+    },
+    sede: { codigo: 'PRIN', nombre: 'Principal', direccion: 'Cra 10 # 20-30', telefono: '6011234567' },
+    caja: { codigo: 'C1', nombre: 'Caja 1' },
+    cajero: 'Carlos Cajero',
+    vendedor: 'Carlos Cajero',
+    venta: {
+      id: '01932c3e-0000-7000-8000-000000000001',
+      numero_interno: 7,
+      numero_ticket: 'C1-000007',
+      codigo_barras: 'C1-000007',
+      fecha: '2026-11-07T15:30:00Z',
+      placa_vehiculo: null,
+    },
+    cliente: { documento: '222222222222', tipo_documento: '13', nombre: 'Consumidor final', es_consumidor_final: true },
+    resolucion: {
+      numero_resolucion: '18760000001',
+      fecha_resolucion: '2026-01-01T00:00:00Z',
+      prefijo: 'SETP',
+      rango_desde: 990000000,
+      rango_hasta: 995000000,
+      vigente_desde: '2026-01-01T00:00:00Z',
+      vigente_hasta: '2027-01-01T00:00:00Z',
+    },
+    lineas: [
+      {
+        linea: 1,
+        sku: 'PAS-001',
+        descripcion: 'Pastillas de freno delanteras Chevrolet Spark 2018',
+        cantidad: '2',
+        unidad: '94',
+        precio_unitario: '45000.00',
+        descuento_valor: '0.00',
+        tarifa_pct: '19.00',
+        total_linea: '90000.00',
+      },
+      {
+        linea: 2,
+        sku: 'FIL-010',
+        descripcion: 'Filtro de aceite',
+        cantidad: '1',
+        unidad: '94',
+        precio_unitario: '18000.00',
+        descuento_valor: '1800.00',
+        tarifa_pct: '19.00',
+        total_linea: '16200.00',
+      },
+    ],
+    impuestos: [{ codigo: '01', tarifa_pct: '19.00', base_gravable: '89075.63', impuesto: '16924.37' }],
+    totales: { subtotal: '89075.63', descuento_total: '1800.00', impuesto_total: '16924.37', redondeo: '0.00', total: '106200.00' },
+    pagos: [{ medio_pago_codigo: '10', medio_pago: 'Efectivo', valor: '106200.00', valor_recibido: '110000.00', cambio_devuelto: '3800.00', referencia: null, ultimos_digitos: null }],
+    cambio_total: '3800.00',
+    fiscal: {
+      documento_id: '01932c3e-0000-7000-8000-0000000000aa',
+      tipo: 'FE',
+      estado: 'aceptado',
+      numero_completo: 'SETP990000123',
+      cufe: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6',
+      qr_data: 'https://catalogo-vpfe-hab.dian.gov.co/document/searchqr?documentkey=abc123',
+      leyenda: null,
+      definitivo: true,
+      ...sobrescribir,
+    },
+  }
+}

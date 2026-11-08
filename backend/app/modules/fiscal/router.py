@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.api.deps import Actor, Db, requiere_permiso, sede_efectiva
 from app.api.paginacion import Pag, Pagina, aplicar_orden, paginar
+from app.aplicacion import fiscal as uc
 from app.core.almacenamiento import get_almacenamiento
 from app.core.errores import NoEncontrado
 from app.modules.fiscal import emision
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/fiscal", tags=["fiscal"])
 Ve = Annotated[Actor, Depends(requiere_permiso("fiscal.ver"))]
 Gestiona = Annotated[Actor, Depends(requiere_permiso("fiscal.gestionar"))]
 Dinero = Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
-EstadoDoc = Literal["borrador", "pendiente_envio", "enviado", "aceptado", "rechazado", "contingencia"]
+EstadoDoc = Literal["borrador", "pendiente_envio", "enviado", "aceptado", "rechazado", "contingencia", "anulado"]
 TipoDoc = Literal["FE", "NC", "ND", "POS_E", "NA", "DS"]
 
 
@@ -48,6 +49,7 @@ class DocumentoListaOut(BaseModel):
     venta_id: uuid.UUID | None
     devolucion_id: uuid.UUID | None
     documento_referenciado_id: uuid.UUID | None
+    documento_corrige_id: uuid.UUID | None = None
     tiene_pdf: bool = False
 
 
@@ -94,6 +96,30 @@ class DocumentoDetalleOut(DocumentoListaOut):
 
 class ReintentoIn(BaseModel):
     comentario: str | None = Field(None, max_length=300)
+
+
+class CorreccionIn(BaseModel):
+    """Datos del adquirente a corregir (solo los enviados cambian). Montos, ítems y pagos NO se pueden tocar."""
+
+    model_config = ConfigDict(extra="forbid")
+    motivo: str = Field(min_length=3, max_length=300)
+    tipo_documento_codigo: str | None = Field(None, max_length=3)
+    numero_documento: str | None = Field(None, min_length=3, max_length=20)
+    dv: int | None = Field(None, ge=0, le=9)
+    tipo_persona_codigo: Literal["1", "2"] | None = None
+    nombre_completo: str | None = Field(None, min_length=2, max_length=250)
+    razon_social: str | None = Field(None, min_length=2, max_length=250)
+    regimen_codigo: str | None = Field(None, max_length=5)
+    responsabilidades: list[str] | None = None
+    email: str | None = Field(None, max_length=200)
+    telefono: str | None = Field(None, max_length=40)
+    direccion: str | None = Field(None, max_length=250)
+    municipio_codigo: str | None = Field(None, max_length=10)
+    actualizar_tercero: bool = Field(
+        False,
+        description="Si es true, aplica los mismos cambios al maestro `identidad.terceros` (con evento y auditoría). "
+        "Por defecto solo cambia el snapshot de la FE nueva.",
+    )
 
 
 class ResolverIn(BaseModel):
@@ -192,6 +218,22 @@ def reintentar_documento(doc_id: uuid.UUID, datos: ReintentoIn, db: Db, actor: G
     _documento(db, actor, doc_id)
     d = emision.reintentar(db, doc_id, actor.empleado.id, datos.comentario)
     return _lista(d)
+
+
+@router.post(
+    "/documentos/{doc_id}/corregir",
+    response_model=DocumentoListaOut,
+    status_code=201,
+    summary="Corrige el adquirente de una FE rechazada y la reemite (fiscal.gestionar; queda auditado)",
+)
+def corregir_documento(doc_id: uuid.UUID, datos: CorreccionIn, db: Db, actor: Gestiona):
+    """El rechazado queda `anulado` (no requiere NC) y se crea una FE nueva para la misma venta. Devuelve la nueva."""
+    _documento(db, actor, doc_id)
+    cambios = datos.model_dump(exclude_unset=True, exclude={"motivo", "actualizar_tercero"})
+    nuevo = uc.corregir_documento(
+        db, doc_id, actor.empleado.id, cambios, datos.motivo, actualizar_tercero=datos.actualizar_tercero
+    )
+    return _lista(nuevo)
 
 
 @router.get("/documentos/{doc_id}/pdf", summary="PDF de la representación gráfica (documento aceptado)")

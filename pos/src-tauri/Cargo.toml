@@ -1,0 +1,23 @@
+[package]
+name = "mundorepuestos-pos"
+version = "0.1.0"
+description = "POS de escritorio de MundoRepuestos"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "mundorepuestos_pos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Almacén seguro del sistema (Windows Credential Manager / Keychain / Secret Service)
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Graphics_Gdi", "Win32_Graphics_Printing"] }

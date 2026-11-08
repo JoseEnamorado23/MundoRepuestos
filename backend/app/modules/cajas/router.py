@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import Actor, Db, SesionPosActual, persistir_si_falla, requiere_permiso
 from app.modules.cajas import servicios as svc
+from app.modules.identidad.servicios import permisos_de
+from app.modules.organizacion import configuracion as cfg_sede
 
 dispositivos_router = APIRouter(prefix="/cajas/dispositivos", tags=["cajas"])
 pos_router = APIRouter(prefix="/pos", tags=["pos"])
@@ -52,6 +54,10 @@ class SesionPosOut(BaseModel):
     dispositivo_id: uuid.UUID
     caja_id: uuid.UUID
     sede_id: uuid.UUID
+    permisos: list[str] = Field(default_factory=list, description="Permisos del empleado (para habilitar pantallas).")
+    redondeo_efectivo: int = Field(
+        0, description="Unidad de redondeo del pago 100 % en efectivo en esta sede (0 = sin redondeo, 50 o 100)."
+    )
 
 
 class AutorizacionIn(BaseModel):
@@ -113,6 +119,8 @@ def login_pos(
         dispositivo_id=disp.id,
         caja_id=disp.caja_id,
         sede_id=disp.sede_id,
+        permisos=sorted(permisos_de(db, emp.id)),
+        redondeo_efectivo=int(cfg_sede.obtener(db, disp.sede_id, "ventas.redondeo_efectivo") or 0),
     )
 
 

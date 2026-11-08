@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Tema: tokens como variables CSS. Claro por defecto; `.dark` (o la preferencia del sistema) para oscuro. */
+:root {
+  --fondo: #f6f7f9;
+  --superficie: #ffffff;
+  --superficie-2: #eef0f4;
+  --borde: #c9ced8;
+  --texto: #14181f;
+  --texto-suave: #4a5262;
+  --marca: #b4281c;
+  --marca-texto: #ffffff;
+  --acento: #0b5cad;
+  --ok: #17703a;
+  --aviso: #8a5a00;
+  --error: #b3261e;
+  --foco: #0b5cad;
+}
+.dark {
+  --fondo: #0e1116;
+  --superficie: #171b22;
+  --superficie-2: #212733;
+  --borde: #3a4252;
+  --texto: #f1f3f7;
+  --texto-suave: #b4bccb;
+  --marca: #ff6a5c;
+  --marca-texto: #1a0300;
+  --acento: #6db3ff;
+  --ok: #52d37f;
+  --aviso: #f2b84b;
+  --error: #ff8a80;
+  --foco: #6db3ff;
+}
+
+@theme inline {
+  --color-fondo: var(--fondo);
+  --color-superficie: var(--superficie);
+  --color-superficie2: var(--superficie-2);
+  --color-borde: var(--borde);
+  --color-texto: var(--texto);
+  --color-suave: var(--texto-suave);
+  --color-marca: var(--marca);
+  --color-marcatexto: var(--marca-texto);
+  --color-acento: var(--acento);
+  --color-ok: var(--ok);
+  --color-aviso: var(--aviso);
+  --color-error: var(--error);
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+html, body, #root { height: 100%; }
+body { background: var(--fondo); color: var(--texto); font-family: var(--font-sans); font-size: 16px; }
+/* Anillo de foco visible siempre: el POS se usa con teclado. */
+:focus-visible { outline: 3px solid var(--foco); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+
+@keyframes destello { 0% { box-shadow: inset 0 0 0 9999px rgba(23,112,58,.35); } 100% { box-shadow: inset 0 0 0 9999px rgba(23,112,58,0); } }
+@keyframes destello-error { 0% { box-shadow: inset 0 0 0 9999px rgba(179,38,30,.35); } 100% { box-shadow: inset 0 0 0 9999px rgba(179,38,30,0); } }
+.destello-ok { animation: destello .6s ease-out; }
+.destello-error { animation: destello-error .6s ease-out; }
+@media (prefers-reduced-motion: reduce) { .destello-ok, .destello-error { animation: none; } }
+
+/* Vista previa de la tirilla (80 mm / 58 mm) y su impresión con window.print */
+.tirilla { background: #fff; color: #000; font-family: var(--font-mono); font-size: 12px; line-height: 1.25; padding: 4mm; margin: 0 auto; }
+.tirilla.w80 { width: 80mm; }
+.tirilla.w58 { width: 58mm; font-size: 11px; }
+@media print {
+  body * { visibility: hidden !important; }
+  #zona-impresion, #zona-impresion * { visibility: visible !important; }
+  #zona-impresion { position: absolute; inset: 0; }
+  @page { margin: 0; }
+}

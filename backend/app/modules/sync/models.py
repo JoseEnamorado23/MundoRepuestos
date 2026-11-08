@@ -7,6 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Identity,
@@ -49,6 +50,7 @@ class OutboxEvento(Base):
     __tablename__ = "outbox_eventos"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_outbox_eventos_idempotency_key"),
+        CheckConstraint("alcance IN ('local','sincronizable')", name="alcance"),
         Index(
             "ix_outbox_eventos_cola",
             "proximo_intento_at",
@@ -69,6 +71,8 @@ class OutboxEvento(Base):
     version_agregado: Mapped[int] = mapped_column(Integer, nullable=False)
     payload_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # 'local': evento de uso exclusivo del nodo (p. ej. `fiscal.*`), el agente de sync NO lo replica.
+    alcance: Mapped[str] = mapped_column(Text, nullable=False, server_default="sincronizable")
     estado: Mapped[str] = mapped_column(EstadoOutbox, nullable=False, server_default="pendiente")
     intentos: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
     proximo_intento_at: Mapped[datetime] = ts(null=False, server_default=text("now()"))

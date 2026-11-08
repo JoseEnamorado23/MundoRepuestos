@@ -85,6 +85,9 @@ def test_pin_correcto_y_claims_de_la_sesion(client, mundo):
     d = r.json()
     assert d["empleado_id"] == str(mundo.cajero.id) and d["caja_id"] == mundo.caja and d["sede_id"] == mundo.sede
     assert d["dispositivo_id"] == str(mundo.dispositivo_id) and d["expira_en"] == 600 * 60
+    # el POS habilita pantallas por permisos y calcula el cobro con la unidad de redondeo de la sede
+    assert isinstance(d["permisos"], list) and "pos.vender" in d["permisos"]
+    assert d["redondeo_efectivo"] in (0, 50, 100)
     import jwt as pyjwt
 
     claims = pyjwt.decode(d["token"], options={"verify_signature": False})

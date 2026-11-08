@@ -1,0 +1,10 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+test-results
+playwright-report
+.env
+e2e/.estado*.json
+e2e/capturas
+openapi.json.bak

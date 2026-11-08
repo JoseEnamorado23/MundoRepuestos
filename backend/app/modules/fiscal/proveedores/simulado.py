@@ -104,6 +104,16 @@ class ProveedorFiscalSimulado(ProveedorFiscal):
             raise RechazoValidacion("Error de validación", errores=["items: El campo items es obligatorio."])
         if tipo == "NC" and not doc.numero_documento_referenciado:
             raise RechazoValidacion("Error de validación", errores=["bill_number: es obligatorio"], http_status=422)
+        cli = doc.adquirente
+        if str(cli.get("tipo_documento_codigo")) == "31" and cli.get("dv") is not None:
+            from app.modules.organizacion.servicios import calcular_dv
+
+            if int(cli["dv"]) != calcular_dv(str(cli["numero_documento"])):  # igual que la DIAN: NIT con DV inválido
+                raise RechazoValidacion(
+                    "La DIAN rechazó el documento.",
+                    errores=["Regla: FAJ24, Rechazo: el NIT del adquirente no es válido (dígito de verificación)"],
+                    http_status=201,
+                )
         if self._rechaza(ref):
             raise RechazoValidacion(
                 "La DIAN rechazó el documento.",

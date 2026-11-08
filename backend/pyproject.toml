@@ -30,8 +30,13 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
-markers = ["factus: pruebas contra el sandbox real de Factus (se omiten sin credenciales en .env)"]
+# `factus` (sandbox real, consume consecutivos compartidos) y `rendimiento` (miden tiempos; dependen de la máquina y
+# la latencia de la BD) NO corren por defecto: `uv run pytest -m factus -s` / `uv run pytest -m rendimiento -s`
+addopts = "-ra -m 'not factus and not rendimiento'"
+markers = [
+    "factus: pruebas contra el sandbox real de Factus (se omiten sin credenciales en .env)",
+    "rendimiento: pruebas de rendimiento (p95, etc.); se corren a mano con -m rendimiento",
+]
 filterwarnings = ["ignore:Cannot correctly sort tables:sqlalchemy.exc.SAWarning"]
 
 [tool.ruff]

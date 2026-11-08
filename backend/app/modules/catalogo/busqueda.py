@@ -315,6 +315,11 @@ def _ejecutar(db, candidatos_sql, filtros, params, categoria_id, marca_id, vehic
                p.activo, p.stock_minimo, c.score,
                (SELECT cb.codigo FROM catalogo.productos_codigos_barras cb
                  WHERE cb.producto_id = p.id AND cb.activo ORDER BY cb.es_principal DESC LIMIT 1) AS codigo_barras,
+               (SELECT u.codigo FROM inventario.productos_ubicaciones pu
+                  JOIN inventario.ubicaciones u ON u.id = pu.ubicacion_id AND u.activo
+                  JOIN inventario.bodegas bu ON bu.id = u.bodega_id
+                 WHERE pu.producto_id = p.id AND (CAST(:sede AS uuid) IS NULL OR bu.sede_id = :sede)
+                 ORDER BY pu.es_principal DESC, u.codigo LIMIT 1) AS ubicacion,
                pr.precio, COALESCE(st.disponible, 0) AS stock_disponible,
                count(*) OVER () AS total
           FROM ({candidatos_sql}) c
@@ -356,6 +361,11 @@ def producto_por_codigo(db: Session, codigo: str, sede_id: uuid.UUID | None) -> 
         SELECT p.id, p.sku, p.nombre, p.marca_id, p.categoria_id, p.activo, p.vendible_pos, p.impuesto_id,
                i.codigo AS impuesto_codigo, i.tarifa_pct, i.tratamiento,
                hit.codigo AS codigo_barras, hit.unidades_por_codigo,
+               (SELECT u.codigo FROM inventario.productos_ubicaciones pu
+                  JOIN inventario.ubicaciones u ON u.id = pu.ubicacion_id AND u.activo
+                  JOIN inventario.bodegas bu ON bu.id = u.bodega_id
+                 WHERE pu.producto_id = p.id AND (CAST(:sede AS uuid) IS NULL OR bu.sede_id = :sede)
+                 ORDER BY pu.es_principal DESC, u.codigo LIMIT 1) AS ubicacion,
                pr.precio, COALESCE(st.disponible, 0) AS stock_disponible
           FROM (
                 SELECT producto_id, codigo, unidades_por_codigo, 1 AS prio FROM catalogo.productos_codigos_barras
